@@ -96,6 +96,66 @@ func TestParseEnvelopeIgnoresUnsupportedItems(t *testing.T) {
 	}
 }
 
+func TestParseEnvelopeReadsLegacyUserReport(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{"event_id":"550e8400e29b41d4a716446655440000"}`,
+		`{"type":"user_report"}`,
+		`{"event_id":"550e8400e29b41d4a716446655440000","name":"Jane","email":"jane@example.test","comments":"It broke"}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	reports := parsed.UserReports()
+	if len(reports) != 1 {
+		t.Fatalf("expected one report, got %d", len(reports))
+	}
+
+	if reports[0].EventID != "550e8400e29b41d4a716446655440000" ||
+		reports[0].Name != "Jane" ||
+		reports[0].Email != "jane@example.test" ||
+		reports[0].Comments != "It broke" {
+		t.Fatalf("unexpected report: %+v", reports[0])
+	}
+}
+
+func TestParseEnvelopeReadsFeedbackAssociatedEvent(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{"event_id":"650e8400e29b41d4a716446655440000"}`,
+		`{"type":"feedback"}`,
+		`{"event_id":"650e8400e29b41d4a716446655440000","contexts":{"feedback":{"associated_event_id":"550e8400e29b41d4a716446655440000","name":"John","contact_email":"john@example.test","message":"This error is annoying"}}}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	reports := parsed.UserReports()
+	if len(reports) != 1 {
+		t.Fatalf("expected one report, got %d", len(reports))
+	}
+
+	if reports[0].EventID != "550e8400e29b41d4a716446655440000" ||
+		reports[0].Name != "John" ||
+		reports[0].Email != "john@example.test" ||
+		reports[0].Comments != "This error is annoying" {
+		t.Fatalf("unexpected report: %+v", reports[0])
+	}
+}
+
 func TestParseEnvelopeRejectsEventAndTransactionTogether(t *testing.T) {
 	envelope := strings.Join([]string{
 		`{}`,

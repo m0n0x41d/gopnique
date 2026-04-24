@@ -77,6 +77,8 @@ func runServer(env []string, stdout io.Writer, stderr io.Writer, mode config.Mod
 		store,
 		store,
 		store,
+		store,
+		store,
 		netresolver.New(nil),
 		store,
 		httpadapter.AuthSettings{PublicURL: cfg.PublicURL, SecretKey: cfg.SecretKey},
@@ -144,6 +146,8 @@ func runAllInOne(env []string, stdout io.Writer, stderr io.Writer) int {
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
+		store,
 		store,
 		store,
 		store,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/a-h/templ"
 	auditapp "github.com/ivanzakutnii/error-tracker/internal/app/audit"
+	dimensionapp "github.com/ivanzakutnii/error-tracker/internal/app/dimensions"
 	"github.com/ivanzakutnii/error-tracker/internal/app/health"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
 	memberapp "github.com/ivanzakutnii/error-tracker/internal/app/members"
@@ -15,6 +16,7 @@ import (
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/web/templates"
 )
 
@@ -32,6 +34,8 @@ func New(
 	probe health.DatabaseProbe,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
+	userReportReader userreportapp.Reader,
+	dimensionReader dimensionapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -43,7 +47,7 @@ func New(
 ) *Server {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewHandler(probe, ingestBackend, issueManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, auth),
+		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -54,6 +58,8 @@ func NewHandler(
 	probe health.DatabaseProbe,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
+	userReportReader userreportapp.Reader,
+	dimensionReader dimensionapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -63,13 +69,15 @@ func NewHandler(
 	operatorAccess operators.Access,
 	auth AuthSettings,
 ) http.Handler {
-	return newMux(probe, ingestBackend, issueManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, NewSessionCodec(auth.SecretKey), auth)
+	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, NewSessionCodec(auth.SecretKey), auth)
 }
 
 func newMux(
 	probe health.DatabaseProbe,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
+	userReportReader userreportapp.Reader,
+	dimensionReader dimensionapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -84,6 +92,7 @@ func newMux(
 
 	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend))
+	mux.HandleFunc("POST /api/{project_ref}/user-feedback/", sentryUserFeedbackHandler(ingestBackend))
 	mux.HandleFunc("GET /api/v1/project", currentProjectAPIHandler(projectReader, tokenManager, auth))
 	mux.HandleFunc("GET /setup", setupGetHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /setup", setupPostHandler(operatorAccess, sessions, auth))
@@ -91,11 +100,13 @@ func newMux(
 	mux.HandleFunc("POST /login", loginPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /logout", logoutPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("GET /issues", issueListHandler(issueManager, operatorAccess, sessions))
-	mux.HandleFunc("GET /issues/{issue_id}", issueDetailHandler(issueManager, operatorAccess, sessions))
+	mux.HandleFunc("GET /issues/{issue_id}", issueDetailHandler(issueManager, userReportReader, operatorAccess, sessions))
 	mux.HandleFunc("POST /issues/{issue_id}/status", issueStatusHandler(issueManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /issues/{issue_id}/comments", issueCommentHandler(issueManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /issues/{issue_id}/assignment", issueAssignmentHandler(issueManager, operatorAccess, sessions))
 	mux.HandleFunc("GET /events/{event_id}", eventDetailHandler(issueManager, operatorAccess, sessions))
+	mux.HandleFunc("GET /environments", environmentsHandler(dimensionReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /releases", releasesHandler(dimensionReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /projects", projectDetailHandler(projectReader, operatorAccess, sessions, auth))
 	mux.HandleFunc("GET /settings/members", membersHandler(memberReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /settings/tokens", tokenSettingsHandler(tokenManager, operatorAccess, sessions))

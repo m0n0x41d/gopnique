@@ -2,6 +2,7 @@ package httpadapter
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,17 +15,20 @@ import (
 
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/sentryprotocol"
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
 )
 
 const maxStoreRequestBytes = 1 * 1024 * 1024
+const maxUserFeedbackRequestBytes = 1 * 1024 * 1024
 
 var sentryKeyPattern = regexp.MustCompile(`(?:^|[\s,])(sentry_key|glitchtip_key)=([^,\s]+)`)
 
 type SentryIngestBackend interface {
 	ingest.ProjectDirectory
 	ingest.IngestTransaction
+	userreportapp.Writer
 }
 
 type sentryAuthCarrier struct {
@@ -41,8 +45,9 @@ const (
 )
 
 type parsedSentryEvent struct {
-	event    domain.CanonicalEvent
-	hasEvent bool
+	event       domain.CanonicalEvent
+	hasEvent    bool
+	userReports []sentryprotocol.UserReportItem
 }
 
 func sentryStoreHandler(backend SentryIngestBackend) http.HandlerFunc {
@@ -54,6 +59,12 @@ func sentryStoreHandler(backend SentryIngestBackend) http.HandlerFunc {
 func sentryEnvelopeHandler(backend SentryIngestBackend) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		handleSentryIngestCarrier(w, r, backend, sentryEnvelopeRequest)
+	}
+}
+
+func sentryUserFeedbackHandler(backend SentryIngestBackend) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		handleSentryUserFeedbackCarrier(w, r, backend)
 	}
 }
 
@@ -107,7 +118,20 @@ func handleSentryIngestCarrier(
 		return
 	}
 
+	reportCommandsResult := prepareParsedUserReports(auth, parsed.userReports)
+	reportCommands, reportCommandsErr := reportCommandsResult.Value()
+	if reportCommandsErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportCommandsErr.Error()})
+		return
+	}
+
 	if !parsed.hasEvent {
+		reportErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
+		if reportErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
+			return
+		}
+
 		writeJSON(w, http.StatusOK, map[string]string{})
 		return
 	}
@@ -119,7 +143,67 @@ func handleSentryIngestCarrier(
 		return
 	}
 
+	reportErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
+	if reportErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
+		return
+	}
+
 	writeIngestReceipt(w, receipt)
+}
+
+func handleSentryUserFeedbackCarrier(
+	w http.ResponseWriter,
+	r *http.Request,
+	backend SentryIngestBackend,
+) {
+	if backend == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "ingest_backend_not_configured"})
+		return
+	}
+
+	bodyResult := readSentryUserFeedbackBody(w, r)
+	body, bodyErr := bodyResult.Value()
+	if bodyErr != nil {
+		writeJSON(w, httpStatusForBodyError(bodyErr), map[string]string{"detail": bodyErr.Error()})
+		return
+	}
+
+	carrierResult := decodeSentryAuthCarrier(r, nil, sentryStoreRequest)
+	carrier, authErr := carrierResult.Value()
+	if authErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	authResult := resolveProjectAuth(r, backend, carrier)
+	auth, projectErr := authResult.Value()
+	if projectErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	reportResult := parseUserFeedbackRequest(body)
+	report, reportErr := reportResult.Value()
+	if reportErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
+		return
+	}
+
+	reportCommandsResult := prepareParsedUserReports(auth, []sentryprotocol.UserReportItem{report})
+	reportCommands, reportCommandsErr := reportCommandsResult.Value()
+	if reportCommandsErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportCommandsErr.Error()})
+		return
+	}
+
+	submitErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
+	if submitErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": submitErr.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"eventID": report.EventID})
 }
 
 func decodeSentryAuthCarrier(
@@ -271,6 +355,21 @@ func readSentryBody(
 	return result.Ok(body)
 }
 
+func readSentryUserFeedbackBody(w http.ResponseWriter, r *http.Request) result.Result[[]byte] {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUserFeedbackRequestBytes+1)
+
+	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxUserFeedbackRequestBytes+1))
+	if readErr != nil {
+		return result.Err[[]byte](errors.New("payload_too_large"))
+	}
+
+	if len(body) > maxUserFeedbackRequestBytes {
+		return result.Err[[]byte](errors.New("payload_too_large"))
+	}
+
+	return result.Ok(body)
+}
+
 func sentryRequestLimit(kind sentryRequestKind) int64 {
 	if kind == sentryStoreRequest {
 		return maxStoreRequestBytes
@@ -371,10 +470,98 @@ func parseSentryRequest(
 
 	event, ok := envelope.Event()
 	if !ok {
-		return result.Ok(parsedSentryEvent{})
+		return result.Ok(parsedSentryEvent{userReports: envelope.UserReports()})
 	}
 
-	return result.Ok(parsedSentryEvent{event: event, hasEvent: true})
+	return result.Ok(parsedSentryEvent{
+		event:       event,
+		hasEvent:    true,
+		userReports: envelope.UserReports(),
+	})
+}
+
+type userFeedbackRequest struct {
+	EventID  string `json:"event_id"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Comments string `json:"comments"`
+}
+
+func parseUserFeedbackRequest(body []byte) result.Result[sentryprotocol.UserReportItem] {
+	var payload userFeedbackRequest
+	decodeErr := json.Unmarshal(body, &payload)
+	if decodeErr != nil {
+		return result.Err[sentryprotocol.UserReportItem](errors.New("invalid_user_feedback"))
+	}
+
+	return result.Ok(sentryprotocol.UserReportItem{
+		EventID:  strings.TrimSpace(payload.EventID),
+		Name:     strings.TrimSpace(payload.Name),
+		Email:    strings.TrimSpace(payload.Email),
+		Comments: strings.TrimSpace(payload.Comments),
+	})
+}
+
+func prepareParsedUserReports(
+	auth domain.ProjectAuth,
+	reports []sentryprotocol.UserReportItem,
+) result.Result[[]userreportapp.SubmitCommand] {
+	commands := []userreportapp.SubmitCommand{}
+
+	for _, report := range reports {
+		commandResult := prepareParsedUserReport(auth, report)
+		command, commandErr := commandResult.Value()
+		if commandErr != nil {
+			return result.Err[[]userreportapp.SubmitCommand](commandErr)
+		}
+
+		commands = append(commands, command)
+	}
+
+	return result.Ok(commands)
+}
+
+func prepareParsedUserReport(
+	auth domain.ProjectAuth,
+	report sentryprotocol.UserReportItem,
+) result.Result[userreportapp.SubmitCommand] {
+	eventID, eventIDErr := domain.NewEventID(report.EventID)
+	if eventIDErr != nil {
+		return result.Err[userreportapp.SubmitCommand](errors.New("user report event id is invalid"))
+	}
+
+	commandResult := userreportapp.PrepareSubmit(userreportapp.SubmitCommand{
+		Scope: userreportapp.Scope{
+			OrganizationID: auth.OrganizationID(),
+			ProjectID:      auth.ProjectID(),
+		},
+		EventID:  eventID,
+		Name:     report.Name,
+		Email:    report.Email,
+		Comments: report.Comments,
+	})
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		return result.Err[userreportapp.SubmitCommand](commandErr)
+	}
+
+	return result.Ok(command)
+}
+
+func submitPreparedUserReports(
+	ctx context.Context,
+	writer userreportapp.Writer,
+	commands []userreportapp.SubmitCommand,
+) error {
+	for _, command := range commands {
+		receiptResult := userreportapp.Submit(ctx, writer, command)
+		_, receiptErr := receiptResult.Value()
+		if receiptErr != nil {
+			return receiptErr
+		}
+	}
+
+	return nil
 }
 
 func writeProtocolError(w http.ResponseWriter, err error) {

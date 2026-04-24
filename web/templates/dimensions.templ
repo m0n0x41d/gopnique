@@ -1,0 +1,112 @@
+package templates
+
+import (
+	"fmt"
+	"net/url"
+
+	dimensionapp "github.com/ivanzakutnii/error-tracker/internal/app/dimensions"
+)
+
+templ EnvironmentsPage(view dimensionapp.View) {
+	@DimensionPage(
+		view,
+		"Environments",
+		"environments",
+		"Runtime dimensions",
+		"Events grouped by environment from project-scoped issues.",
+		"environment",
+	)
+}
+
+templ ReleasesPage(view dimensionapp.View) {
+	@DimensionPage(
+		view,
+		"Releases",
+		"releases",
+		"Deploy dimensions",
+		"Events grouped by release from project-scoped issues.",
+		"release",
+	)
+}
+
+templ DimensionPage(
+	view dimensionapp.View,
+	title string,
+	active string,
+	eyebrow string,
+	subtitle string,
+	filterKey string,
+) {
+	@Layout(title, active) {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">{ eyebrow }</div>
+					<h1 class="h-1">{ title }</h1>
+					<div class="page__sub">{ subtitle }</div>
+				</div>
+				<div class="row gap-2">
+					<a class="btn" href="/issues">Open issues</a>
+					<a class="btn" href={ templ.URL("/issues?q=is%3Aunresolved") }>Unresolved</a>
+				</div>
+			</section>
+			if len(view.Items) == 0 {
+				<section class="empty card">
+					<div class="eyebrow">No { title }</div>
+					<h2 class="h-2">Accepted SDK events will populate this page.</h2>
+					<p>Send events with { filterKey } set to make this dimension visible.</p>
+				</section>
+			} else {
+				<section class="card">
+					<div class="card__head">
+						<span class="eyebrow">{ title }</span>
+						<span class="chip">{ dimensionCountLabel(view) }</span>
+					</div>
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Name</th>
+									<th>Issues</th>
+									<th>Unresolved</th>
+									<th>Resolved</th>
+									<th>Ignored</th>
+									<th>Last seen</th>
+									<th></th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, item := range view.Items {
+									<tr>
+										<td class="mono">{ item.Name }</td>
+										<td class="mono">{ fmt.Sprint(item.IssueCount) }</td>
+										<td><span class="chip chip--error">{ fmt.Sprint(item.UnresolvedCount) }</span></td>
+										<td><span class="chip chip--ok">{ fmt.Sprint(item.ResolvedCount) }</span></td>
+										<td><span class="chip chip--debug">{ fmt.Sprint(item.IgnoredCount) }</span></td>
+										<td>{ item.LastSeen }</td>
+										<td><a class="btn btn--ghost btn--sm" href={ templ.URL(dimensionIssuesURL(filterKey, item.Name)) }>View issues</a></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+func dimensionCountLabel(view dimensionapp.View) string {
+	if len(view.Items) == 1 {
+		return "1 value"
+	}
+
+	return fmt.Sprintf("%d values", len(view.Items))
+}
+
+func dimensionIssuesURL(filterKey string, value string) string {
+	query := url.Values{}
+	query.Set("q", "is:unresolved "+filterKey+":"+value)
+
+	return "/issues?" + query.Encode()
+}

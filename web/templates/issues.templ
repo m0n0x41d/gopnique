@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 )
 
 templ IssueList(view issueapp.IssueListView) {
@@ -73,7 +74,7 @@ templ IssueList(view issueapp.IssueListView) {
 	}
 }
 
-templ IssueDetail(view issueapp.IssueDetailView) {
+templ IssueDetail(view issueapp.IssueDetailView, reports userreportapp.IssueReportsView) {
 	@Layout("Issue", "issues") {
 		<div class="page">
 			<section class="detail-head">
@@ -161,6 +162,43 @@ templ IssueDetail(view issueapp.IssueDetailView) {
 				<div class="card__body">
 					@TagList(view.Tags)
 				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">User reports</span>
+					<span class="chip">{ userReportCountLabel(reports) }</span>
+				</div>
+				if len(reports.Items) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>User</th>
+									<th>Event</th>
+									<th>Comments</th>
+									<th>Time</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, report := range reports.Items {
+									<tr>
+										<td>
+											<div>{ report.Name }</div>
+											<div class="mono">{ report.Email }</div>
+										</td>
+										<td class="break"><a href={ templ.URL("/events/" + report.EventID) }>{ report.EventID }</a></td>
+										<td>{ report.Comments }</td>
+										<td>{ report.CreatedAt }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
 			</section>
 			<section class="card payload-card">
 				<div class="card__head">
@@ -338,6 +376,14 @@ func commentCountLabel(comments []issueapp.CommentView) string {
 	}
 
 	return fmt.Sprint(len(comments)) + " comments"
+}
+
+func userReportCountLabel(reports userreportapp.IssueReportsView) string {
+	if len(reports.Items) == 1 {
+		return "1 report"
+	}
+
+	return fmt.Sprint(len(reports.Items)) + " reports"
 }
 
 func statusFilterClass(active string, status string) string {

@@ -6,6 +6,7 @@ import (
 
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/web/templates"
 )
@@ -59,6 +60,7 @@ func issueListHandler(
 
 func issueDetailHandler(
 	reader issueapp.Reader,
+	reportReader userreportapp.Reader,
 	access operators.Access,
 	sessions SessionCodec,
 ) http.HandlerFunc {
@@ -98,7 +100,25 @@ func issueDetailHandler(
 			return
 		}
 
-		renderHTML(w, r, templates.IssueDetail(view))
+		reportsResult := userreportapp.ListForIssue(
+			r.Context(),
+			reportReader,
+			userreportapp.IssueReportsQuery{
+				Scope: userreportapp.Scope{
+					OrganizationID: session.OrganizationID,
+					ProjectID:      session.ProjectID,
+				},
+				IssueID: issueID,
+				Limit:   100,
+			},
+		)
+		reports, reportsErr := reportsResult.Value()
+		if reportsErr != nil {
+			http.Error(w, "user reports unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		renderHTML(w, r, templates.IssueDetail(view, reports))
 	}
 }
 

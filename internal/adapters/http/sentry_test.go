@@ -10,6 +10,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
 	"github.com/ivanzakutnii/error-tracker/internal/plans/ingestplan"
@@ -23,7 +24,7 @@ func TestSentryStoreRouteIngestsAfterAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -44,7 +45,7 @@ func TestSentryEnvelopeRouteDeniesMissingAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -180,6 +181,23 @@ func (backend fakeSentryBackend) ShowEvent(
 	query issueapp.EventDetailQuery,
 ) result.Result[issueapp.EventDetailView] {
 	return result.Ok(issueapp.EventDetailView{})
+}
+
+func (backend fakeSentryBackend) SubmitUserReport(
+	ctx context.Context,
+	command userreportapp.SubmitCommand,
+) result.Result[userreportapp.SubmitReceipt] {
+	return result.Ok(userreportapp.SubmitReceipt{
+		ReportID: "55555555-5555-4555-a555-555555555555",
+		EventID:  command.EventID.String(),
+	})
+}
+
+func (backend fakeSentryBackend) ListIssueUserReports(
+	ctx context.Context,
+	query userreportapp.IssueReportsQuery,
+) result.Result[userreportapp.IssueReportsView] {
+	return result.Ok(userreportapp.IssueReportsView{})
 }
 
 func (backend fakeSentryBackend) TransitionIssueStatus(

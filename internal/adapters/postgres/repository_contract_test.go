@@ -24,6 +24,7 @@ import (
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
+	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
 )
@@ -42,8 +43,8 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 15 {
-		t.Fatalf("expected 15 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 16 {
+		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{
@@ -313,6 +314,48 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	}
 
 	issueID := mustRepositoryValue(t, domain.NewIssueID, issueList.Items[0].ID)
+	reportResult := userreportapp.Submit(
+		ctx,
+		store,
+		userreportapp.SubmitCommand{
+			Scope: userreportapp.Scope{
+				OrganizationID: auth.OrganizationID(),
+				ProjectID:      auth.ProjectID(),
+			},
+			EventID:  event.EventID(),
+			Name:     "Repo User",
+			Email:    "repo-user@example.test",
+			Comments: "Repository contract report",
+		},
+	)
+	report, reportErr := reportResult.Value()
+	if reportErr != nil {
+		t.Fatalf("submit user report: %v", reportErr)
+	}
+	if report.ReportID == "" {
+		t.Fatal("expected user report id")
+	}
+
+	reportsResult := userreportapp.ListForIssue(
+		ctx,
+		store,
+		userreportapp.IssueReportsQuery{
+			Scope: userreportapp.Scope{
+				OrganizationID: auth.OrganizationID(),
+				ProjectID:      auth.ProjectID(),
+			},
+			IssueID: issueID,
+			Limit:   50,
+		},
+	)
+	reports, reportsErr := reportsResult.Value()
+	if reportsErr != nil {
+		t.Fatalf("list user reports: %v", reportsErr)
+	}
+	if len(reports.Items) != 1 || reports.Items[0].Comments != "Repository contract report" {
+		t.Fatalf("unexpected user reports: %#v", reports.Items)
+	}
+
 	commentResult := issueapp.AddComment(
 		ctx,
 		store,
@@ -588,8 +631,8 @@ func TestPostgresIssueShortIDConcurrency(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 15 {
-		t.Fatalf("expected 15 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 16 {
+		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{

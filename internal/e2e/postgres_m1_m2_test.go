@@ -48,13 +48,15 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 15 {
-		t.Fatalf("expected 15 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 16 {
+		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	publicURL := "http://example.test"
 	resolver := e2eResolver{"hooks.example.test": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
+		store,
 		store,
 		store,
 		store,
@@ -207,12 +209,17 @@ func TestPostgresM1M2E2E(t *testing.T) {
 		t.Fatalf("client ip leaked into event detail: %s", eventDetail.Body)
 	}
 
+	postUserFeedbackThroughAPI(t, client, server.URL, publicKey)
+	postLegacyUserReportEnvelope(t, client, server.URL, publicKey)
+	postFeedbackEnvelope(t, client, server.URL, publicKey)
+	assertUserReportVisible(t, client, server.URL, issueID)
 	addIssueCommentThroughUI(t, client, server.URL, issueID, "E2E operator comment")
 	assertIssueCommentVisible(t, client, server.URL, issueID, "E2E operator comment")
 	teamID := assignIssueThroughUI(t, ctx, databaseURL, client, server.URL, issueID)
 	assertIssueAssigneeVisible(t, client, server.URL, issueID, "Default team")
 	assertIssueSearchFilters(t, client, server.URL, teamID)
 	assertIssueSearchRejectsUnsupportedSyntax(t, client, server.URL)
+	assertDimensionPages(t, client, server.URL)
 	setIssueStatusThroughUI(t, client, server.URL, issueID, "resolved")
 	assertIssueStatusDetail(t, client, server.URL, issueID, "resolved", "Reopen")
 	assertIssueListDoesNotContain(t, client, server.URL, "unresolved", "dimension persistence visible issue")
@@ -786,6 +793,141 @@ func assertIssueSearchRejectsUnsupportedSyntax(
 	response := request(t, client, http.MethodGet, baseURL+"/issues?"+query.Encode(), "", nil)
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected invalid search bad request, got %d: %s", response.StatusCode, response.Body)
+	}
+}
+
+func postUserFeedbackThroughAPI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) {
+	t.Helper()
+
+	body := strings.Join([]string{
+		`{`,
+		`"event_id":"980e8400e29b41d4a716446655440000",`,
+		`"name":"Modal User",`,
+		`"email":"modal@example.test",`,
+		`"comments":"Crash modal says it broke"`,
+		`}`,
+	}, "")
+	response := request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/user-feedback/?sentry_key="+publicKey,
+		"application/json",
+		strings.NewReader(body),
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected user feedback ok, got %d: %s", response.StatusCode, response.Body)
+	}
+}
+
+func postLegacyUserReportEnvelope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) {
+	t.Helper()
+
+	envelope := strings.Join([]string{
+		`{"event_id":"980e8400e29b41d4a716446655440000"}`,
+		`{"type":"user_report"}`,
+		`{"event_id":"980e8400e29b41d4a716446655440000","name":"Jane","email":"jane@example.test","comments":"Legacy report text"}`,
+	}, "\n")
+	response := request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/envelope/?sentry_key="+publicKey,
+		"application/x-sentry-envelope",
+		strings.NewReader(envelope),
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected user report envelope ok, got %d: %s", response.StatusCode, response.Body)
+	}
+}
+
+func postFeedbackEnvelope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) {
+	t.Helper()
+
+	envelope := strings.Join([]string{
+		`{"event_id":"990e8400e29b41d4a716446655440000"}`,
+		`{"type":"feedback"}`,
+		`{"event_id":"990e8400e29b41d4a716446655440000","contexts":{"feedback":{"associated_event_id":"980e8400e29b41d4a716446655440000","name":"John","contact_email":"john@example.test","message":"This error is annoying"}}}`,
+	}, "\n")
+	response := request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/envelope/?sentry_key="+publicKey,
+		"application/x-sentry-envelope",
+		strings.NewReader(envelope),
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected feedback envelope ok, got %d: %s", response.StatusCode, response.Body)
+	}
+}
+
+func assertUserReportVisible(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	issueID string,
+) {
+	t.Helper()
+
+	response := request(t, client, http.MethodGet, baseURL+"/issues/"+issueID, "", nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected reported issue detail ok, got %d: %s", response.StatusCode, response.Body)
+	}
+
+	for _, expected := range []string{
+		"User reports",
+		"John",
+		"john@example.test",
+		"This error is annoying",
+		"980e8400-e29b-41d4-a716-446655440000",
+	} {
+		if !strings.Contains(response.Body, expected) {
+			t.Fatalf("expected user report detail to contain %q: %s", expected, response.Body)
+		}
+	}
+}
+
+func assertDimensionPages(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+
+	environments := request(t, client, http.MethodGet, baseURL+"/environments", "", nil)
+	if environments.StatusCode != http.StatusOK {
+		t.Fatalf("expected environments ok, got %d: %s", environments.StatusCode, environments.Body)
+	}
+	if !strings.Contains(environments.Body, "Environments") ||
+		!strings.Contains(environments.Body, "production") ||
+		!strings.Contains(environments.Body, "q=is%3Aunresolved+environment%3Aproduction") {
+		t.Fatalf("expected environment dimension page: %s", environments.Body)
+	}
+
+	releases := request(t, client, http.MethodGet, baseURL+"/releases", "", nil)
+	if releases.StatusCode != http.StatusOK {
+		t.Fatalf("expected releases ok, got %d: %s", releases.StatusCode, releases.Body)
+	}
+	if !strings.Contains(releases.Body, "Releases") ||
+		!strings.Contains(releases.Body, "api@1.2.3") ||
+		!strings.Contains(releases.Body, "q=is%3Aunresolved+release%3Aapi%401.2.3") {
+		t.Fatalf("expected release dimension page: %s", releases.Body)
 	}
 }
 
@@ -1595,6 +1737,16 @@ func assertProjectMemberRoleGate(
 	projects := request(t, client, http.MethodGet, baseURL+"/projects", "", nil)
 	if projects.StatusCode != http.StatusOK {
 		t.Fatalf("expected project member project read ok, got %d: %s", projects.StatusCode, projects.Body)
+	}
+
+	environments := request(t, client, http.MethodGet, baseURL+"/environments", "", nil)
+	if environments.StatusCode != http.StatusOK {
+		t.Fatalf("expected project member environments read ok, got %d: %s", environments.StatusCode, environments.Body)
+	}
+
+	releases := request(t, client, http.MethodGet, baseURL+"/releases", "", nil)
+	if releases.StatusCode != http.StatusOK {
+		t.Fatalf("expected project member releases read ok, got %d: %s", releases.StatusCode, releases.Body)
 	}
 
 	settings := request(t, client, http.MethodGet, baseURL+"/settings/notifications", "", nil)

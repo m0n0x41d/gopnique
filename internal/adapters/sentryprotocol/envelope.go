@@ -21,11 +21,19 @@ const (
 )
 
 type EnvelopeResult struct {
-	event     domain.CanonicalEvent
-	hasEvent  bool
-	itemType  string
-	ignored   []string
-	duplicate bool
+	event       domain.CanonicalEvent
+	hasEvent    bool
+	itemType    string
+	ignored     []string
+	userReports []UserReportItem
+	duplicate   bool
+}
+
+type UserReportItem struct {
+	EventID  string
+	Name     string
+	Email    string
+	Comments string
 }
 
 type envelopeHeader struct {
@@ -96,10 +104,11 @@ func ParseEnvelope(
 	}
 
 	return result.Ok(EnvelopeResult{
-		event:    state.event,
-		hasEvent: state.hasEvent,
-		itemType: state.itemType,
-		ignored:  append([]string{}, state.ignored...),
+		event:       state.event,
+		hasEvent:    state.hasEvent,
+		itemType:    state.itemType,
+		ignored:     append([]string{}, state.ignored...),
+		userReports: append([]UserReportItem{}, state.userReports...),
 	})
 }
 
@@ -217,10 +226,11 @@ func consumeTrailingNewline(reader *bufio.Reader) {
 }
 
 type envelopeState struct {
-	event    domain.CanonicalEvent
-	hasEvent bool
-	itemType string
-	ignored  []string
+	event       domain.CanonicalEvent
+	hasEvent    bool
+	itemType    string
+	ignored     []string
+	userReports []UserReportItem
 }
 
 func applyItem(
@@ -233,6 +243,10 @@ func applyItem(
 ) result.Result[envelopeState] {
 	if isReservedItem(item.Type) {
 		return result.Err[envelopeState](NewProtocolError(ErrorInvalidEnvelope, "reserved item type"))
+	}
+
+	if isUserReportItem(item.Type) {
+		return applyUserReportItem(state, item, payload)
 	}
 
 	if isIgnoredItem(item.Type) {
@@ -262,8 +276,101 @@ func applyItem(
 	return result.Ok(state)
 }
 
+func applyUserReportItem(
+	state envelopeState,
+	item itemHeader,
+	payload []byte,
+) result.Result[envelopeState] {
+	reportResult := parseUserReportItem(item.Type, payload)
+	report, reportErr := reportResult.Value()
+	if reportErr != nil {
+		return result.Err[envelopeState](reportErr)
+	}
+
+	state.userReports = append(state.userReports, report)
+
+	return result.Ok(state)
+}
+
+type legacyUserReportPayload struct {
+	EventID  string `json:"event_id"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Comments string `json:"comments"`
+}
+
+type feedbackPayload struct {
+	EventID  string                     `json:"event_id"`
+	Contexts map[string]json.RawMessage `json:"contexts"`
+}
+
+type feedbackContext struct {
+	Message           string `json:"message"`
+	Name              string `json:"name"`
+	ContactEmail      string `json:"contact_email"`
+	AssociatedEventID string `json:"associated_event_id"`
+}
+
+func parseUserReportItem(itemType string, payload []byte) result.Result[UserReportItem] {
+	if itemType == "feedback" {
+		return parseFeedbackItem(payload)
+	}
+
+	return parseLegacyUserReportItem(payload)
+}
+
+func parseLegacyUserReportItem(payload []byte) result.Result[UserReportItem] {
+	var legacy legacyUserReportPayload
+	decodeErr := json.Unmarshal(payload, &legacy)
+	if decodeErr != nil {
+		return result.Err[UserReportItem](NewProtocolError(ErrorInvalidEnvelope, "invalid user report"))
+	}
+
+	return result.Ok(UserReportItem{
+		EventID:  strings.TrimSpace(legacy.EventID),
+		Name:     strings.TrimSpace(legacy.Name),
+		Email:    strings.TrimSpace(legacy.Email),
+		Comments: strings.TrimSpace(legacy.Comments),
+	})
+}
+
+func parseFeedbackItem(payload []byte) result.Result[UserReportItem] {
+	var feedback feedbackPayload
+	decodeErr := json.Unmarshal(payload, &feedback)
+	if decodeErr != nil {
+		return result.Err[UserReportItem](NewProtocolError(ErrorInvalidEnvelope, "invalid feedback"))
+	}
+
+	contextPayload := feedback.Contexts["feedback"]
+	if len(contextPayload) == 0 {
+		return result.Err[UserReportItem](NewProtocolError(ErrorInvalidEnvelope, "feedback context is required"))
+	}
+
+	var context feedbackContext
+	contextErr := json.Unmarshal(contextPayload, &context)
+	if contextErr != nil {
+		return result.Err[UserReportItem](NewProtocolError(ErrorInvalidEnvelope, "invalid feedback context"))
+	}
+
+	eventID := strings.TrimSpace(context.AssociatedEventID)
+	if eventID == "" {
+		eventID = strings.TrimSpace(feedback.EventID)
+	}
+
+	return result.Ok(UserReportItem{
+		EventID:  eventID,
+		Name:     strings.TrimSpace(context.Name),
+		Email:    strings.TrimSpace(context.ContactEmail),
+		Comments: strings.TrimSpace(context.Message),
+	})
+}
+
 func isSupportedItem(itemType string) bool {
 	return itemType == "event" || itemType == "transaction"
+}
+
+func isUserReportItem(itemType string) bool {
+	return itemType == "user_report" || itemType == "feedback"
 }
 
 func isIgnoredItem(itemType string) bool {
@@ -271,7 +378,6 @@ func isIgnoredItem(itemType string) bool {
 		"attachment":       {},
 		"check_in":         {},
 		"client_report":    {},
-		"feedback":         {},
 		"log":              {},
 		"otel_log":         {},
 		"profile":          {},
@@ -282,7 +388,6 @@ func isIgnoredItem(itemType string) bool {
 		"session":          {},
 		"sessions":         {},
 		"span":             {},
-		"user_report":      {},
 	}
 
 	_, ok := ignored[itemType]
@@ -308,6 +413,10 @@ func (envelope EnvelopeResult) Event() (domain.CanonicalEvent, bool) {
 
 func (envelope EnvelopeResult) ItemType() string {
 	return envelope.itemType
+}
+
+func (envelope EnvelopeResult) UserReports() []UserReportItem {
+	return append([]UserReportItem{}, envelope.userReports...)
 }
 
 func (envelope EnvelopeResult) IgnoredItems() []string {
