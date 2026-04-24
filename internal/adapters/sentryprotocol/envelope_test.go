@@ -1,0 +1,193 @@
+package sentryprotocol
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ivanzakutnii/error-tracker/internal/domain"
+)
+
+func TestParseEnvelopeAcceptsEventItem(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{"event_id":"550e8400e29b41d4a716446655440000"}`,
+		`{"type":"event"}`,
+		`{"event_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","timestamp":"2026-04-24T10:00:00Z","message":"hello"}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	event, ok := parsed.Event()
+	if !ok {
+		t.Fatal("expected event")
+	}
+
+	if parsed.ItemType() != "event" {
+		t.Fatalf("unexpected item type: %s", parsed.ItemType())
+	}
+
+	if event.EventID().Hex() != "550e8400e29b41d4a716446655440000" {
+		t.Fatalf("expected envelope event id override, got %s", event.EventID().Hex())
+	}
+}
+
+func TestParseEnvelopeAcceptsLengthPrefixedTransactionItem(t *testing.T) {
+	payload := `{"event_id":"550e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","type":"transaction","transaction":"GET /checkout"}`
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"transaction","length":` + intString(len(payload)) + `}`,
+		payload,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	event, ok := parsed.Event()
+	if !ok {
+		t.Fatal("expected transaction event")
+	}
+
+	if event.Kind() != domain.EventKindTransaction {
+		t.Fatalf("unexpected kind: %s", event.Kind())
+	}
+}
+
+func TestParseEnvelopeIgnoresUnsupportedItems(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"session"}`,
+		`{"started":"2026-04-24T10:00:00Z"}`,
+		`{"type":"client_report"}`,
+		`{"discarded_events":[]}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	if parsed.HasEvent() {
+		t.Fatal("did not expect canonical event")
+	}
+
+	if len(parsed.IgnoredItems()) != 2 {
+		t.Fatalf("expected two ignored items, got %d", len(parsed.IgnoredItems()))
+	}
+}
+
+func TestParseEnvelopeRejectsEventAndTransactionTogether(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"event"}`,
+		`{"event_id":"550e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","message":"hello"}`,
+		`{"type":"transaction"}`,
+		`{"event_id":"650e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","type":"transaction","transaction":"GET /checkout"}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	_, parseErr := result.Value()
+	if parseErr == nil {
+		t.Fatal("expected mixed supported items to fail")
+	}
+}
+
+func TestParseEnvelopeRejectsReservedItem(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"security"}`,
+		`{}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	_, parseErr := result.Value()
+	if parseErr == nil {
+		t.Fatal("expected reserved item to fail")
+	}
+}
+
+func TestEnvelopeHeaderDSNReadsDSN(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{"dsn":"http://550e8400e29b41d4a716446655440000@example.test/42"}`,
+		`{"type":"client_report"}`,
+		`{}`,
+	}, "\n")
+
+	result := EnvelopeHeaderDSN([]byte(envelope))
+	dsn, dsnErr := result.Value()
+	if dsnErr != nil {
+		t.Fatalf("dsn: %v", dsnErr)
+	}
+
+	if dsn != "http://550e8400e29b41d4a716446655440000@example.test/42" {
+		t.Fatalf("unexpected dsn: %s", dsn)
+	}
+}
+
+func TestParseEnvelopeRejectsTooManyItems(t *testing.T) {
+	lines := []string{`{}`}
+	for index := 0; index < MaxEnvelopeItems+1; index++ {
+		lines = append(lines, `{"type":"client_report"}`)
+		lines = append(lines, `{}`)
+	}
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(strings.Join(lines, "\n")),
+	)
+	_, parseErr := result.Value()
+	if parseErr == nil {
+		t.Fatal("expected too many items to fail")
+	}
+}
+
+func TestParseEnvelopeRejectsOversizedLengthItem(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"event","length":` + intString(MaxEnvelopeItemBytes+1) + `}`,
+		`{}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	_, parseErr := result.Value()
+	if parseErr == nil {
+		t.Fatal("expected oversized item to fail")
+	}
+}
+
+func intString(value int) string {
+	return strconv.Itoa(value)
+}

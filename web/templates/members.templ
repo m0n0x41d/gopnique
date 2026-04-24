@@ -1,0 +1,121 @@
+package templates
+
+import (
+	"fmt"
+
+	memberapp "github.com/ivanzakutnii/error-tracker/internal/app/members"
+)
+
+templ MembersPage(view memberapp.View) {
+	@Layout("Members", "members") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Access</div>
+					<h1 class="h-1">Members</h1>
+					<div class="page__sub">Project access is carried by explicit organization, project, and team memberships.</div>
+				</div>
+			</section>
+			<section class="detail-grid">
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Operators</span>
+						<span class="chip">{ operatorCountLabel(view) }</span>
+					</div>
+					if len(view.Operators) == 0 {
+						<div class="card__body">
+							<p class="t-mute">None</p>
+						</div>
+					} else {
+						<div class="table-wrap table-wrap--embedded">
+							<table class="small-table">
+								<thead>
+									<tr>
+										<th>Email</th>
+										<th>Organization</th>
+										<th>Project</th>
+										<th>Status</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, operator := range view.Operators {
+										<tr>
+											<td>{ operator.Email }</td>
+											<td>{ operator.OrgRole }</td>
+											<td>{ operator.ProjectRole }</td>
+											<td><span class={ memberStatusChipClass(operator.Status) }>{ operator.Status }</span></td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					}
+				</div>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Teams</span>
+						<span class="chip">{ teamCountLabel(view) }</span>
+					</div>
+					if len(view.Teams) == 0 {
+						<div class="card__body">
+							<p class="t-mute">None</p>
+						</div>
+					} else {
+						<div class="table-wrap table-wrap--embedded">
+							<table class="small-table">
+								<thead>
+									<tr>
+										<th>Name</th>
+										<th>Slug</th>
+										<th>Members</th>
+										<th>Team</th>
+										<th>Project</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, team := range view.Teams {
+										<tr>
+											<td>{ team.Name }</td>
+											<td class="mono">{ team.Slug }</td>
+											<td class="mono">{ memberCountText(team) }</td>
+											<td>{ team.MemberRole }</td>
+											<td>{ team.ProjectRole }</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					}
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func operatorCountLabel(view memberapp.View) string {
+	if len(view.Operators) == 1 {
+		return "1 operator"
+	}
+
+	return "operators"
+}
+
+func teamCountLabel(view memberapp.View) string {
+	if len(view.Teams) == 1 {
+		return "1 team"
+	}
+
+	return "teams"
+}
+
+func memberCountText(team memberapp.TeamView) string {
+	return fmt.Sprintf("%d", team.MemberCount)
+}
+
+func memberStatusChipClass(status string) string {
+	if status == "active" {
+		return "chip chip--ok"
+	}
+
+	return "chip chip--debug"
+}

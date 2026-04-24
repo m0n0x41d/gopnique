@@ -1,0 +1,65 @@
+package templates
+
+import (
+	auditapp "github.com/ivanzakutnii/error-tracker/internal/app/audit"
+)
+
+templ AuditPage(view auditapp.View) {
+	@Layout("Audit", "audit") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Runtime evidence</div>
+					<h1 class="h-1">Audit trail</h1>
+					<div class="page__sub">Sensitive operator actions are recorded with actor, target, metadata, and timestamp.</div>
+				</div>
+			</section>
+			<section>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Events</span>
+						<span class="chip">{ auditCountLabel(view) }</span>
+					</div>
+					if len(view.Events) == 0 {
+						<div class="card__body">
+							<p class="t-mute">None</p>
+						</div>
+					} else {
+						<div class="table-wrap table-wrap--embedded">
+							<table class="small-table">
+								<thead>
+									<tr>
+										<th>Action</th>
+										<th>Actor</th>
+										<th>Target</th>
+										<th>Metadata</th>
+										<th>Time</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, event := range view.Events {
+										<tr>
+											<td>{ event.Action }</td>
+											<td>{ event.Actor }</td>
+											<td class="mono">{ event.Target }</td>
+											<td class="mono">{ event.Metadata }</td>
+											<td>{ event.CreatedAt }</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					}
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func auditCountLabel(view auditapp.View) string {
+	if len(view.Events) == 1 {
+		return "1 event"
+	}
+
+	return "events"
+}

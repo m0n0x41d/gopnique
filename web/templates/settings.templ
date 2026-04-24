@@ -1,0 +1,359 @@
+package templates
+
+import (
+	"fmt"
+
+	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
+)
+
+type NotificationSettingsMessage struct {
+	Text string
+	Kind string
+}
+
+templ NotificationSettingsPage(view settingsapp.ProjectSettingsView, message NotificationSettingsMessage) {
+	@Layout("Alert Channels", "notifications") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Notifications</div>
+					<h1 class="h-1">Alert channels</h1>
+					<div class="page__sub">Destinations are carriers. Delivery happens only through enabled issue-opened alert actions.</div>
+				</div>
+			</section>
+			@NotificationSettingsPanel(view, message)
+		</div>
+	}
+}
+
+templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message NotificationSettingsMessage) {
+	<section id="notification-settings" class="settings-stack">
+		if message.Text != "" {
+			<div class={ messageClass(message) }>{ message.Text }</div>
+		}
+		<section class="detail-grid">
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Telegram destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/telegram-destinations"
+						class="form"
+						hx-post="/settings/notifications/telegram-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Chat ID</span>
+							<input name="chat_id" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save destination</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Webhook destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/webhook-destinations"
+						class="form"
+						hx-post="/settings/notifications/webhook-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save webhook</button>
+					</form>
+				</div>
+			</div>
+		</section>
+		<section class="detail-grid">
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Issue opened rule</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/issue-opened-alerts"
+						class="form"
+						hx-post="/settings/notifications/issue-opened-alerts"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Name</span>
+							<input name="name" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Destination</span>
+							<select name="destination" required>
+								if destinationCount(view) == 0 {
+									<option value="">No destinations</option>
+								}
+								for _, destination := range view.TelegramDestinations {
+									<option value={ destinationOptionValue("telegram", destination.ID) }>{ destination.Label } · telegram</option>
+								}
+								for _, destination := range view.WebhookDestinations {
+									<option value={ destinationOptionValue("webhook", destination.ID) }>{ destination.Label } · webhook</option>
+								}
+							</select>
+						</label>
+						if destinationCount(view) == 0 {
+							<button class="btn btn--primary" type="submit" disabled>Save alert</button>
+						} else {
+							<button class="btn btn--primary" type="submit">Save alert</button>
+						}
+					</form>
+				</div>
+			</div>
+		</section>
+		<section class="detail-grid">
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Telegram</span>
+					<span class="chip">{ telegramDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.TelegramDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>Chat</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.TelegramDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.ChatID }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Webhooks</span>
+					<span class="chip">{ webhookDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.WebhookDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.WebhookDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Rules</span>
+					<span class="chip">{ alertCountLabel(view) }</span>
+				</div>
+				if len(view.IssueOpenedAlerts) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Name</th>
+									<th>Destination</th>
+									<th>Status</th>
+									<th>Action</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, alert := range view.IssueOpenedAlerts {
+									<tr>
+										<td>{ alert.Name }</td>
+										<td>{ alert.DestinationLabel } · { alert.Provider }</td>
+										<td><span class={ statusChipClass(alert.Status) }>{ alert.Status }</span></td>
+										<td>@AlertStatusForm(alert)</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+		</section>
+		<section>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Delivery journal</span>
+					<span class="chip">{ deliveryCountLabel(view) }</span>
+				</div>
+				if len(view.DeliveryIntents) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Provider</th>
+									<th>Destination</th>
+									<th>Status</th>
+									<th>Attempts</th>
+									<th>HTTP</th>
+									<th>Event</th>
+									<th>Error</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, delivery := range view.DeliveryIntents {
+									<tr>
+										<td>{ delivery.Provider }</td>
+										<td>{ delivery.DestinationLabel }</td>
+										<td><span class={ statusChipClass(delivery.Status) }>{ delivery.Status }</span></td>
+										<td class="mono">{ deliveryAttemptText(delivery) }</td>
+										<td class="mono">{ delivery.ResponseCode }</td>
+										<td class="mono">{ delivery.EventID }</td>
+										<td>{ delivery.LastError }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+		</section>
+	</section>
+}
+
+templ AlertStatusForm(alert settingsapp.IssueOpenedAlertView) {
+	<form
+		method="post"
+		action={ alertStatusAction(alert) }
+		class="inline-form"
+		hx-post={ alertStatusAction(alert) }
+		hx-target="#notification-settings"
+		hx-swap="outerHTML"
+	>
+		<button class="btn btn--sm" type="submit">{ alertStatusButtonText(alert) }</button>
+	</form>
+}
+
+func messageClass(message NotificationSettingsMessage) string {
+	if message.Kind == "error" {
+		return "notice notice--error"
+	}
+
+	return "notice notice--success"
+}
+
+func statusChipClass(status string) string {
+	if status == "enabled" || status == "delivered" {
+		return "chip chip--ok"
+	}
+
+	return "chip chip--debug"
+}
+
+func destinationOptionValue(provider string, id string) string {
+	return provider + ":" + id
+}
+
+func destinationCount(view settingsapp.ProjectSettingsView) int {
+	return len(view.TelegramDestinations) + len(view.WebhookDestinations)
+}
+
+func telegramDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.TelegramDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func webhookDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.WebhookDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func alertCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.IssueOpenedAlerts) == 1 {
+		return "1 rule"
+	}
+
+	return "rules"
+}
+
+func deliveryCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.DeliveryIntents) == 1 {
+		return "1 delivery"
+	}
+
+	return "deliveries"
+}
+
+func deliveryAttemptText(delivery settingsapp.DeliveryIntentView) string {
+	return fmt.Sprintf("%d", delivery.Attempts)
+}
+
+func alertStatusAction(alert settingsapp.IssueOpenedAlertView) string {
+	if alert.Status == "enabled" {
+		return "/settings/notifications/issue-opened-alerts/" + alert.ID + "/disable"
+	}
+
+	return "/settings/notifications/issue-opened-alerts/" + alert.ID + "/enable"
+}
+
+func alertStatusButtonText(alert settingsapp.IssueOpenedAlertView) string {
+	if alert.Status == "enabled" {
+		return "Disable"
+	}
+
+	return "Enable"
+}

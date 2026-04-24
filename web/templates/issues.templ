@@ -1,0 +1,391 @@
+package templates
+
+import (
+	"fmt"
+	"strings"
+
+	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
+)
+
+templ IssueList(view issueapp.IssueListView) {
+	@Layout("Issues", "issues") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Triage inbox</div>
+					<h1 class="h-1">Issues</h1>
+					<div class="page__sub">Sorted by last seen. Store and envelope events appear here after grouping.</div>
+				</div>
+				<a class="btn" href="/settings/notifications">Alert settings</a>
+			</section>
+			<div class="filters">
+				<form class="search" method="get" action="/issues">
+					<svg><use href="#i-search"></use></svg>
+					<input class="input input--mono" name="q" value={ view.Search } placeholder="is:unresolved environment:production tag:region=eu"/>
+				</form>
+				<a href="/issues?q=is:unresolved" class={ statusFilterClass(view.Status, "unresolved") }>Status <span class="val">unresolved</span></a>
+				<a href="/issues?q=is:resolved" class={ statusFilterClass(view.Status, "resolved") }>Status <span class="val">resolved</span></a>
+				<a href="/issues?q=is:ignored" class={ statusFilterClass(view.Status, "ignored") }>Status <span class="val">ignored</span></a>
+				<span class="chip-filter">Environment <span class="val">any</span></span>
+				<span class="chip-filter">Release <span class="val">any</span></span>
+			</div>
+			if len(view.Items) == 0 {
+				<section class="empty card">
+					<div class="eyebrow">No issues</div>
+					<h2 class="h-2">Accepted SDK events will appear here.</h2>
+					<p>Send a Sentry store or envelope event to this project DSN to create the first issue.</p>
+				</section>
+			} else {
+				<section class="issuelist">
+					<div class="issuelist__colhead">
+						<span></span>
+						<span>Issue</span>
+						<span>Level</span>
+						<span>Events</span>
+						<span>Release</span>
+						<span>Last seen</span>
+					</div>
+					for _, item := range view.Items {
+						<a href={ templ.URL("/issues/" + item.ID) } class={ issueRowClass(item.Level) }>
+							<span class="irow__check" aria-hidden="true"></span>
+							<span class="irow__main">
+								<span class="irow__title">
+									<span class="err-type">#{ fmt.Sprint(item.ShortID) }</span>
+									{ item.Title }
+								</span>
+								<span class="irow__subtitle">
+									<span>{ item.Type }</span>
+									<span class="mono">{ fallback(item.Environment) }</span>
+									<span class="mono">{ fallback(item.Platform) }</span>
+									<span class="mono">assignee { fallback(item.Assignee) }</span>
+									<span class="mono">{ item.LatestEventID }</span>
+								</span>
+							</span>
+							<span><span class={ levelChipClass(item.Level) }>{ fallback(item.Level) }</span></span>
+							<span class="irow__num">{ fmt.Sprint(item.EventCount) }</span>
+							<span class="irow__meta">{ fallback(item.Release) }</span>
+							<span class="irow__when">{ item.LastSeen }</span>
+						</a>
+					}
+				</section>
+			}
+		</div>
+	}
+}
+
+templ IssueDetail(view issueapp.IssueDetailView) {
+	@Layout("Issue", "issues") {
+		<div class="page">
+			<section class="detail-head">
+				<div class="row gap-2">
+					<a href="/issues" class="btn btn--ghost btn--sm">All issues</a>
+				</div>
+				<h1>
+					<span class="err-type">#{ fmt.Sprint(view.ShortID) }</span>
+					{ view.Title }
+				</h1>
+				<div class="detail-head__meta">
+					<span class={ levelChipClass(view.LatestLevel) }>{ fallback(view.LatestLevel) }</span>
+					<span class="chip">{ view.Status }</span>
+					<span class="chip">assignee { fallback(view.Assignee) }</span>
+					<span class="mono">{ fmt.Sprint(view.EventCount) } events</span>
+					<span class="mono">last seen { view.LastSeen }</span>
+				</div>
+				@IssueStatusActions(view)
+			</section>
+			<section class="tabs">
+				<span class="tabs__btn is-active">Summary</span>
+				<a class="tabs__btn" href={ templ.URL("/events/" + view.LatestEventID) }>Canonical payload</a>
+			</section>
+			<section class="detail-grid">
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Timeline</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>First seen</dt>
+							<dd>{ view.FirstSeen }</dd>
+							<dt>Last seen</dt>
+							<dd>{ view.LastSeen }</dd>
+							<dt>Latest level</dt>
+							<dd>{ fallback(view.LatestLevel) }</dd>
+							<dt>Platform</dt>
+							<dd>{ fallback(view.LatestPlatform) }</dd>
+							<dt>Assignee</dt>
+							<dd>{ fallback(view.Assignee) }</dd>
+						</dl>
+					</div>
+				</div>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Latest event</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>Event</dt>
+							<dd class="break"><a href={ templ.URL("/events/" + view.LatestEventID) }>{ view.LatestEventID }</a></dd>
+							<dt>Environment</dt>
+							<dd>{ fallback(view.Environment) }</dd>
+							<dt>Release</dt>
+							<dd>{ fallback(view.Release) }</dd>
+							<dt>Fingerprint</dt>
+							<dd class="break mono">{ view.Fingerprint }</dd>
+						</dl>
+					</div>
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">Assignment</span>
+				</div>
+				<div class="card__body">
+					<form method="post" action={ templ.URL("/issues/" + view.ID + "/assignment") } class="form">
+						<label>
+							<span>Assignee</span>
+							<select name="assignee" required>
+								for _, assignee := range view.Assignees {
+									<option value={ assignee.Value }>{ assignee.Label } · { assignee.Kind }</option>
+								}
+							</select>
+						</label>
+						<button class="btn btn--primary" type="submit">Assign</button>
+					</form>
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">Tags</span>
+					<span class="chip">{ tagCountLabel(view.Tags) }</span>
+				</div>
+				<div class="card__body">
+					@TagList(view.Tags)
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">Comments</span>
+					<span class="chip">{ commentCountLabel(view.Comments) }</span>
+				</div>
+				<div class="card__body">
+					<form method="post" action={ templ.URL("/issues/" + view.ID + "/comments") } class="form">
+						<label>
+							<span>Comment</span>
+							<textarea name="body" rows="3" required></textarea>
+						</label>
+						<button class="btn btn--primary" type="submit">Add comment</button>
+					</form>
+				</div>
+				if len(view.Comments) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Actor</th>
+									<th>Comment</th>
+									<th>Time</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, comment := range view.Comments {
+									<tr>
+										<td>{ comment.Actor }</td>
+										<td>{ comment.Body }</td>
+										<td>{ comment.CreatedAt }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</section>
+		</div>
+	}
+}
+
+templ IssueStatusActions(view issueapp.IssueDetailView) {
+	<div class="row gap-2">
+		if view.Status == "unresolved" {
+			@IssueStatusForm(view.ID, "resolved", "Resolve")
+			@IssueStatusForm(view.ID, "ignored", "Ignore")
+		} else {
+			@IssueStatusForm(view.ID, "unresolved", "Reopen")
+		}
+	</div>
+}
+
+templ IssueStatusForm(issueID string, status string, label string) {
+	<form method="post" action={ templ.URL("/issues/" + issueID + "/status") } class="inline-form">
+		<input type="hidden" name="status" value={ status }/>
+		<button class="btn btn--sm" type="submit">{ label }</button>
+	</form>
+}
+
+templ EventDetail(view issueapp.EventDetailView) {
+	@Layout("Event", "issues") {
+		<div class="page">
+			<section class="detail-head">
+				<div class="row gap-2">
+					if view.IssueID != "" {
+						<a href={ templ.URL("/issues/" + view.IssueID) } class="btn btn--ghost btn--sm">Back to issue</a>
+					}
+				</div>
+				<h1>{ view.Title }</h1>
+				<div class="detail-head__meta">
+					<span class={ levelChipClass(view.Level) }>{ fallback(view.Level) }</span>
+					<span class="chip">{ view.Kind }</span>
+					<span class="chip">{ fallback(view.Platform) }</span>
+					<span class="mono">{ view.EventID }</span>
+				</div>
+			</section>
+			<section class="detail-grid">
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Identity</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>Event ID</dt>
+							<dd class="break">{ view.EventID }</dd>
+							<dt>Issue</dt>
+							<dd class="break">
+								if view.IssueID != "" {
+									<a href={ templ.URL("/issues/" + view.IssueID) }>{ view.IssueID }</a>
+								} else {
+									<span>none</span>
+								}
+							</dd>
+							<dt>Fingerprint</dt>
+							<dd class="break">{ view.Fingerprint }</dd>
+						</dl>
+					</div>
+				</div>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Timing</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>Occurred</dt>
+							<dd>{ view.OccurredAt }</dd>
+							<dt>Received</dt>
+							<dd>{ view.ReceivedAt }</dd>
+							<dt>Release</dt>
+							<dd>{ fallback(view.Release) }</dd>
+							<dt>Environment</dt>
+							<dd>{ fallback(view.Environment) }</dd>
+						</dl>
+					</div>
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">Tags</span>
+					<span class="chip">{ tagCountLabel(view.Tags) }</span>
+				</div>
+				<div class="card__body">
+					@TagList(view.Tags)
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">Canonical payload</span>
+				</div>
+				<pre class="payload">{ view.PayloadJSON }</pre>
+			</section>
+		</div>
+	}
+}
+
+templ TagList(tags []issueapp.TagView) {
+	if len(tags) == 0 {
+		<p class="t-mute">none</p>
+	} else {
+		<div class="tag-list">
+			for _, tag := range tags {
+				<span class="tag-pill">
+					<span>{ tag.Key }</span>
+					<code>{ tag.Value }</code>
+				</span>
+			}
+		</div>
+	}
+}
+
+func fallback(value string) string {
+	if value == "" {
+		return "none"
+	}
+
+	return value
+}
+
+func tagCountLabel(tags []issueapp.TagView) string {
+	if len(tags) == 1 {
+		return "1 tag"
+	}
+
+	return fmt.Sprint(len(tags)) + " tags"
+}
+
+func commentCountLabel(comments []issueapp.CommentView) string {
+	if len(comments) == 1 {
+		return "1 comment"
+	}
+
+	return fmt.Sprint(len(comments)) + " comments"
+}
+
+func statusFilterClass(active string, status string) string {
+	if active == status {
+		return "chip-filter is-active"
+	}
+
+	return "chip-filter"
+}
+
+func issueRowClass(level string) string {
+	value := strings.ToLower(level)
+	if value == "fatal" {
+		return "irow lv-fatal"
+	}
+
+	if value == "warning" || value == "warn" {
+		return "irow lv-warn"
+	}
+
+	if value == "info" {
+		return "irow lv-info"
+	}
+
+	if value == "debug" {
+		return "irow lv-debug"
+	}
+
+	return "irow lv-error"
+}
+
+func levelChipClass(level string) string {
+	value := strings.ToLower(level)
+	if value == "fatal" {
+		return "chip chip--fatal"
+	}
+
+	if value == "warning" || value == "warn" {
+		return "chip chip--warn"
+	}
+
+	if value == "info" {
+		return "chip chip--info"
+	}
+
+	if value == "debug" {
+		return "chip chip--debug"
+	}
+
+	return "chip chip--error"
+}

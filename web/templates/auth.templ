@@ -1,0 +1,74 @@
+package templates
+
+templ Setup(message string) {
+	@AuthLayout("Setup", "bootstrap") {
+		<section class="auth-card">
+			<div class="eyebrow">Bootstrap</div>
+			<h1 class="h-1">Create operator and project</h1>
+			<p class="page__sub">This initializes the local self-hosted tracker and creates the first project DSN.</p>
+			if message != "" {
+				<p class="notice notice--error">{ message }</p>
+			}
+			<form method="post" action="/setup" class="form">
+				<label>
+					<span>Organization</span>
+					<input name="organization_name" value="Default Organization" required/>
+				</label>
+				<label>
+					<span>Project</span>
+					<input name="project_name" value="Default Project" required/>
+				</label>
+				<label>
+					<span>Email</span>
+					<input name="email" type="email" autocomplete="username" required/>
+				</label>
+				<label>
+					<span>Password</span>
+					<input name="password" type="password" autocomplete="new-password" minlength="8" required/>
+				</label>
+				<button class="btn btn--primary" type="submit">Create setup</button>
+			</form>
+		</section>
+	}
+}
+
+templ SetupDone(dsn string) {
+	@AuthLayout("Setup Complete", "project ready") {
+		<section class="auth-card auth-card--wide">
+			<div class="eyebrow">Setup complete</div>
+			<h1 class="h-1">Project is ready</h1>
+			<p class="page__sub">Use this DSN for SDK ingest.</p>
+			<div class="dsn-box">
+				<div class="label">DSN</div>
+				<code>{ dsn }</code>
+			</div>
+			<div class="actions">
+				<a class="btn btn--primary" href="/issues">Open issues</a>
+			</div>
+		</section>
+	}
+}
+
+templ Login(message string) {
+	@AuthLayout("Login", "operator login") {
+		<section class="auth-card">
+			<div class="eyebrow">Operator access</div>
+			<h1 class="h-1">Log in</h1>
+			<p class="page__sub">Project access is scoped through the local operator session.</p>
+			if message != "" {
+				<p class="notice notice--error">{ message }</p>
+			}
+			<form method="post" action="/login" class="form">
+				<label>
+					<span>Email</span>
+					<input name="email" type="email" autocomplete="username" required/>
+				</label>
+				<label>
+					<span>Password</span>
+					<input name="password" type="password" autocomplete="current-password" required/>
+				</label>
+				<button class="btn btn--primary" type="submit">Log in</button>
+			</form>
+		</section>
+	}
+}

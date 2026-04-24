@@ -1,0 +1,261 @@
+package templates
+
+templ Layout(title string, active string) {
+	<!doctype html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js" defer></script>
+		</head>
+		<body>
+			@IconSprite()
+			<div class="app">
+				<nav class="rail" aria-label="Primary">
+					<a class="rail__mark" href="/" title="gopnique">g.</a>
+					<a href="/issues" class={ railClass(active, "issues") } title="Issues">
+						<svg><use href="#i-issues"></use></svg>
+					</a>
+					<span class="rail__btn rail__btn--disabled" title="Dashboard planned">
+						<svg><use href="#i-dash"></use></svg>
+					</span>
+					<a href="/projects" class={ railClass(active, "projects") } title="Projects & DSN">
+						<svg><use href="#i-project"></use></svg>
+					</a>
+					<a href="/settings/notifications" class={ railClass(active, "notifications") } title="Alerts">
+						<svg><use href="#i-bell"></use></svg>
+					</a>
+					<a href="/settings/members" class={ railClass(active, "members") } title="Members">
+						<svg><use href="#i-user"></use></svg>
+					</a>
+					<a href="/settings/tokens" class={ railClass(active, "tokens") } title="API Tokens">
+						<svg><use href="#i-key"></use></svg>
+					</a>
+					<a href="/settings/audit" class={ railClass(active, "audit") } title="Audit">
+						<svg><use href="#i-audit"></use></svg>
+					</a>
+					<div class="rail__spacer"></div>
+					<a href="/setup" class={ railClass(active, "setup") } title="Setup">
+						<svg><use href="#i-plus"></use></svg>
+					</a>
+					<a href="/login" class={ railClass(active, "login") } title="Login">
+						<svg><use href="#i-user"></use></svg>
+					</a>
+					<span class="rail__v">m3</span>
+				</nav>
+				<aside class="side" aria-label="Secondary">
+					<div class="side__head">
+						<div class="side__orgrow">
+							<span class="side__orgmark">GP</span>
+							<div class="col col--tight">
+								<div class="side__orgname truncate">gopnique</div>
+								<div class="side__orgmeta mono">self-hosted core</div>
+							</div>
+						</div>
+						<div class="side__search">
+							<svg><use href="#i-search"></use></svg>
+							<input class="input" placeholder="Search issues"/>
+							<kbd>/</kbd>
+						</div>
+					</div>
+					<div class="side__body">
+						<div class="side__section">
+							<div class="eyebrow side__sectionhead">Runtime</div>
+							<a href="/issues" class={ sideNavClass(active, "issues") }>
+								<svg><use href="#i-issues"></use></svg>
+								<span>Issues</span>
+							</a>
+							<a href="/settings/notifications" class={ sideNavClass(active, "notifications") }>
+								<svg><use href="#i-bell"></use></svg>
+								<span>Alert channels</span>
+							</a>
+							<a href="/projects" class={ sideNavClass(active, "projects") }>
+								<svg><use href="#i-project"></use></svg>
+								<span>Projects & DSN</span>
+							</a>
+						</div>
+						<div class="side__section">
+							<div class="eyebrow side__sectionhead">Operator</div>
+							<a href="/setup" class={ sideNavClass(active, "setup") }>
+								<svg><use href="#i-plus"></use></svg>
+								<span>Bootstrap</span>
+							</a>
+							<a href="/login" class={ sideNavClass(active, "login") }>
+								<svg><use href="#i-user"></use></svg>
+								<span>Login</span>
+							</a>
+							<a href="/settings/members" class={ sideNavClass(active, "members") }>
+								<svg><use href="#i-user"></use></svg>
+								<span>Members</span>
+							</a>
+							<a href="/settings/tokens" class={ sideNavClass(active, "tokens") }>
+								<svg><use href="#i-key"></use></svg>
+								<span>API tokens</span>
+							</a>
+							<a href="/settings/audit" class={ sideNavClass(active, "audit") }>
+								<svg><use href="#i-audit"></use></svg>
+								<span>Audit trail</span>
+							</a>
+						</div>
+					</div>
+					<div class="side__foot">
+						<span class="dot dot--ok"></span>
+						<span>Postgres + one binary</span>
+					</div>
+				</aside>
+				<main class="main">
+					<header class="main__head">
+						<div class="crumbs">
+							<span>gopnique</span>
+							<span class="sep">/</span>
+							<span class="tail">{ title }</span>
+						</div>
+						<div class="right">
+							<span class="chip chip--indigo"><span class="dot dot--live"></span>local</span>
+							<form method="post" action="/logout">
+								<button class="btn btn--ghost btn--sm" type="submit">Log out</button>
+							</form>
+						</div>
+					</header>
+					<div class="main__body">
+						{ children... }
+					</div>
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+templ AuthLayout(title string, active string) {
+	<!doctype html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			@IconSprite()
+			<div class="auth-shell">
+				<div class="auth-brand">
+					<a class="rail__mark" href="/">g.</a>
+					<div>
+						<div class="side__orgname">gopnique</div>
+						<div class="side__orgmeta mono">{ active }</div>
+					</div>
+				</div>
+				{ children... }
+			</div>
+		</body>
+	</html>
+}
+
+templ Home() {
+	@Layout("Overview", "issues") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Sentry-compatible tracker</div>
+					<h1 class="h-1">gopnique</h1>
+					<div class="page__sub">Single binary, Postgres, SSR UI, Telegram and webhook alerts.</div>
+				</div>
+				<div class="row gap-2">
+					<a class="btn btn--primary" href="/issues">Open issues</a>
+					<a class="btn" href="/projects">Project DSN</a>
+					<a class="btn" href="/settings/notifications">Alert channels</a>
+				</div>
+			</section>
+			<section class="metric-grid">
+				<div class="kpi">
+					<div class="eyebrow">Ingest</div>
+					<div class="kpi__num">store<span class="unit">+ envelope</span></div>
+					<div class="kpi__delta">M1 runtime evidence</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Notifications</div>
+					<div class="kpi__num">alerts<span class="unit">M2</span></div>
+					<div class="kpi__delta">Telegram and webhooks</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Deployment</div>
+					<div class="kpi__num">1<span class="unit">binary</span></div>
+					<div class="kpi__delta">embedded assets</div>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+templ IconSprite() {
+	<svg width="0" height="0" class="svg-sprite" aria-hidden="true">
+		<defs>
+			<symbol id="i-issues" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M12 2 2 22h20L12 2Z"></path>
+				<path d="M12 9v5"></path>
+				<circle cx="12" cy="18" r="1" fill="currentColor"></circle>
+			</symbol>
+			<symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<rect x="3" y="3" width="7" height="9"></rect>
+				<rect x="14" y="3" width="7" height="5"></rect>
+				<rect x="14" y="12" width="7" height="9"></rect>
+				<rect x="3" y="16" width="7" height="5"></rect>
+			</symbol>
+			<symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path>
+				<path d="M10 21a2 2 0 0 0 4 0"></path>
+			</symbol>
+			<symbol id="i-project" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M3 7 12 3l9 4v10l-9 4-9-4Z"></path>
+				<path d="m3 7 9 4 9-4"></path>
+				<path d="M12 11v10"></path>
+			</symbol>
+			<symbol id="i-telegram" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="m21 4-19 8 6 2 2 6 4-4 6 4Z"></path>
+				<path d="m8 14 10-8"></path>
+			</symbol>
+			<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M12 5v14"></path>
+				<path d="M5 12h14"></path>
+			</symbol>
+			<symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<circle cx="12" cy="8" r="4"></circle>
+				<path d="M4 22a8 8 0 0 1 16 0"></path>
+			</symbol>
+			<symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<circle cx="7.5" cy="14.5" r="3.5"></circle>
+				<path d="M10 12 21 1"></path>
+				<path d="m17 5 2 2"></path>
+				<path d="m14 8 2 2"></path>
+			</symbol>
+			<symbol id="i-audit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M9 3h6l2 3h3v15H4V6h3Z"></path>
+				<path d="M9 13h6"></path>
+				<path d="M9 17h4"></path>
+				<path d="M9 9h6"></path>
+			</symbol>
+			<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+				<circle cx="11" cy="11" r="7"></circle>
+				<path d="m21 21-4.3-4.3"></path>
+			</symbol>
+		</defs>
+	</svg>
+}
+
+func railClass(active string, item string) string {
+	if active == item {
+		return "rail__btn is-active"
+	}
+
+	return "rail__btn"
+}
+
+func sideNavClass(active string, item string) string {
+	if active == item {
+		return "side__nav is-active"
+	}
+
+	return "side__nav"
+}

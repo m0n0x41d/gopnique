@@ -1,0 +1,113 @@
+package templates
+
+import projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
+
+templ ProjectDetail(view projectapp.ProjectView) {
+	@Layout("Projects & DSN", "projects") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">{ view.OrganizationName }</div>
+					<h1 class="h-1">{ view.Name }</h1>
+					<div class="page__sub">Current project ingest identity, Sentry-compatible DSN, and active project key.</div>
+				</div>
+				<a class="btn" href="/issues">Open issues</a>
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">SDK DSN</span>
+					<span class="chip chip--ok">active</span>
+				</div>
+				<div class="card__body">
+					<div class="dsn-box">
+						<span class="label">DSN</span>
+						<code>{ view.DSN }</code>
+					</div>
+				</div>
+			</section>
+			<section class="detail-grid mt-4">
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Project</span>
+						<span class={ projectStatusChipClass(view.AcceptingEvents) }>{ view.AcceptingEvents }</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>Slug</dt>
+							<dd>{ view.Slug }</dd>
+							<dt>Ingest ref</dt>
+							<dd class="mono">{ view.IngestRef }</dd>
+							<dt>Project ID</dt>
+							<dd class="break mono">{ view.ProjectID }</dd>
+							<dt>IP scrubbing</dt>
+							<dd><span class={ projectStatusChipClass(view.ScrubIPAddresses) }>{ view.ScrubIPAddresses }</span></dd>
+							<dt>First event</dt>
+							<dd>{ view.FirstEventAt }</dd>
+							<dt>Created</dt>
+							<dd>{ view.CreatedAt }</dd>
+						</dl>
+					</div>
+				</div>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Active key</span>
+						<span class="chip">{ view.KeyLabel }</span>
+					</div>
+					<div class="card__body">
+						<dl>
+							<dt>Public key</dt>
+							<dd class="break mono">{ view.PublicKey }</dd>
+							<dt>Key ID</dt>
+							<dd class="break mono">{ view.PublicKeyID }</dd>
+							<dt>Created</dt>
+							<dd>{ view.KeyCreatedAt }</dd>
+						</dl>
+					</div>
+				</div>
+			</section>
+			<section class="detail-grid">
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Store endpoint</span>
+					</div>
+					<div class="card__body">
+						<p class="break mono">{ view.StoreEndpoint }</p>
+					</div>
+				</div>
+				<div class="card">
+					<div class="card__head">
+						<span class="eyebrow">Envelope endpoint</span>
+					</div>
+					<div class="card__body">
+						<p class="break mono">{ view.EnvelopeEndpoint }</p>
+					</div>
+				</div>
+			</section>
+			<section class="card payload-card">
+				<div class="card__head">
+					<span class="eyebrow">SDK setup</span>
+					<span class="chip">fixture-backed</span>
+				</div>
+				<div class="sdk-grid">
+					for _, snippet := range view.SDKSnippets {
+						<div class="sdk-cell">
+							<div class="sdk-cell__head">
+								<strong>{ snippet.Name }</strong>
+								<span class="mono">{ snippet.Package }</span>
+							</div>
+							<pre class="snippet"><code>{ snippet.Code }</code></pre>
+						</div>
+					}
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func projectStatusChipClass(status string) string {
+	if status == "enabled" {
+		return "chip chip--ok"
+	}
+
+	return "chip chip--debug"
+}

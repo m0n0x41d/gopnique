@@ -1,0 +1,151 @@
+package templates
+
+import (
+	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
+)
+
+type TokenSettingsMessage struct {
+	Text string
+	Kind string
+}
+
+templ TokenSettingsPage(view tokenapp.ProjectTokenView, message TokenSettingsMessage, oneTimeToken string) {
+	@Layout("API Tokens", "tokens") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Management API</div>
+					<h1 class="h-1">API tokens</h1>
+					<div class="page__sub">Management tokens are separate from Sentry DSN public keys and are scoped to this project.</div>
+				</div>
+			</section>
+			<section class="settings-stack">
+				if message.Text != "" {
+					<div class={ tokenMessageClass(message) }>{ message.Text }</div>
+				}
+				if oneTimeToken != "" {
+					<div class="notice notice--success">
+						<div>Token created. Copy it now; only the prefix is stored after this response.</div>
+						<code class="mono">{ oneTimeToken }</code>
+					</div>
+				}
+				<section class="detail-grid">
+					<div class="card">
+						<div class="card__head">
+							<span class="eyebrow">Create token</span>
+						</div>
+						<div class="card__body">
+							<form method="post" action="/settings/tokens" class="form">
+								<label>
+									<span>Name</span>
+									<input name="name" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Scope</span>
+									<select name="scope" required>
+										<option value="project_read">Project read</option>
+										<option value="project_admin">Project admin</option>
+									</select>
+								</label>
+								<button class="btn btn--primary" type="submit">Create token</button>
+							</form>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card__head">
+							<span class="eyebrow">Active surface</span>
+						</div>
+						<div class="card__body">
+							<div class="stack stack--compact">
+								<div>
+									<div class="t-mute">Endpoint</div>
+									<div class="mono">GET /api/v1/project</div>
+								</div>
+								<div>
+									<div class="t-mute">Auth</div>
+									<div class="mono">Authorization: Bearer etp_...</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</section>
+				<section>
+					<div class="card">
+						<div class="card__head">
+							<span class="eyebrow">Project tokens</span>
+							<span class="chip">{ tokenCountLabel(view) }</span>
+						</div>
+						if len(view.Tokens) == 0 {
+							<div class="card__body">
+								<p class="t-mute">None</p>
+							</div>
+						} else {
+							<div class="table-wrap table-wrap--embedded">
+								<table class="small-table">
+									<thead>
+										<tr>
+											<th>Name</th>
+											<th>Prefix</th>
+											<th>Scope</th>
+											<th>Status</th>
+											<th>Last used</th>
+											<th>Action</th>
+										</tr>
+									</thead>
+									<tbody>
+										for _, token := range view.Tokens {
+											<tr>
+												<td>{ token.Name }</td>
+												<td class="mono">{ token.Prefix }</td>
+												<td>{ token.Scope }</td>
+												<td><span class={ tokenStatusChipClass(token.Status) }>{ token.Status }</span></td>
+												<td>{ token.LastUsedAt }</td>
+												<td>
+													if token.Status == "active" {
+														<form class="inline-form" method="post" action={ tokenRevokeAction(token) }>
+															<button class="btn btn--sm" type="submit">Revoke</button>
+														</form>
+													} else {
+														<span class="t-mute">Revoked</span>
+													}
+												</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							</div>
+						}
+					</div>
+				</section>
+			</section>
+		</div>
+	}
+}
+
+func tokenMessageClass(message TokenSettingsMessage) string {
+	if message.Kind == "error" {
+		return "notice notice--error"
+	}
+
+	return "notice notice--success"
+}
+
+func tokenStatusChipClass(status string) string {
+	if status == "active" {
+		return "chip chip--ok"
+	}
+
+	return "chip chip--debug"
+}
+
+func tokenCountLabel(view tokenapp.ProjectTokenView) string {
+	if len(view.Tokens) == 1 {
+		return "1 token"
+	}
+
+	return "tokens"
+}
+
+func tokenRevokeAction(token tokenapp.ProjectTokenRow) string {
+	return "/settings/tokens/" + token.ID + "/revoke"
+}
