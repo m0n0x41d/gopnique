@@ -1084,6 +1084,55 @@ tr:last-child td {
   gap: 16px;
 }
 
+.provider-accordion {
+  display: grid;
+}
+
+.provider-panel {
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.provider-panel:last-child {
+  border-bottom: 0;
+}
+
+.provider-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.provider-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-panel summary::before {
+  content: "+";
+  color: var(--ink-3);
+}
+
+.provider-panel[open] summary::before {
+  content: "-";
+}
+
+.provider-panel summary span:first-child {
+  margin-right: auto;
+}
+
+.provider-panel__body {
+  border-top: 1px solid var(--rule-soft);
+  background: var(--card-2);
+  padding: 14px;
+}
+
 .form {
   display: grid;
   gap: 14px;

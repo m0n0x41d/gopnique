@@ -198,6 +198,44 @@ type TeamsSendReceipt struct {
 	reason    string
 }
 
+type ZulipDelivery struct {
+	intentID       domain.NotificationIntentID
+	destinationURL outbound.DestinationURL
+	botEmail       domain.ZulipBotEmail
+	apiKey         domain.ZulipAPIKey
+	stream         domain.ZulipStreamName
+	topic          domain.ZulipTopicName
+	event          domain.CanonicalEvent
+	issueID        domain.IssueID
+	issueShortID   int64
+}
+
+type ZulipPayload struct {
+	EventID      string
+	IssueID      string
+	IssueShortID int64
+	Title        string
+	Level        string
+	Platform     string
+	IssueURL     string
+}
+
+type ZulipMessage struct {
+	intentID       domain.NotificationIntentID
+	destinationURL outbound.DestinationURL
+	botEmail       domain.ZulipBotEmail
+	apiKey         domain.ZulipAPIKey
+	stream         domain.ZulipStreamName
+	topic          domain.ZulipTopicName
+	payload        ZulipPayload
+}
+
+type ZulipSendReceipt struct {
+	delivered bool
+	status    int
+	reason    string
+}
+
 type TelegramOutbox interface {
 	ClaimTelegramDeliveries(
 		ctx context.Context,
@@ -364,6 +402,30 @@ type TeamsOutbox interface {
 
 type TeamsSender interface {
 	SendTeams(ctx context.Context, message TeamsMessage) result.Result[TeamsSendReceipt]
+}
+
+type ZulipOutbox interface {
+	ClaimZulipDeliveries(
+		ctx context.Context,
+		now time.Time,
+		limit int,
+	) result.Result[[]ZulipDelivery]
+	MarkZulipDelivered(
+		ctx context.Context,
+		intentID domain.NotificationIntentID,
+		now time.Time,
+		receipt ZulipSendReceipt,
+	) result.Result[struct{}]
+	MarkZulipFailed(
+		ctx context.Context,
+		intentID domain.NotificationIntentID,
+		now time.Time,
+		receipt ZulipSendReceipt,
+	) result.Result[struct{}]
+}
+
+type ZulipSender interface {
+	SendZulip(ctx context.Context, message ZulipMessage) result.Result[ZulipSendReceipt]
 }
 
 func NewTelegramDelivery(
@@ -630,6 +692,62 @@ func NewTeamsDeliveredReceipt(status int) TeamsSendReceipt {
 
 func NewTeamsFailedReceipt(status int, reason string) TeamsSendReceipt {
 	return TeamsSendReceipt{
+		delivered: false,
+		status:    status,
+		reason:    reason,
+	}
+}
+
+func NewZulipDelivery(
+	intentID domain.NotificationIntentID,
+	destinationURL outbound.DestinationURL,
+	botEmail domain.ZulipBotEmail,
+	apiKey domain.ZulipAPIKey,
+	stream domain.ZulipStreamName,
+	topic domain.ZulipTopicName,
+	event domain.CanonicalEvent,
+	issueID domain.IssueID,
+	issueShortID int64,
+) ZulipDelivery {
+	return ZulipDelivery{
+		intentID:       intentID,
+		destinationURL: destinationURL,
+		botEmail:       botEmail,
+		apiKey:         apiKey,
+		stream:         stream,
+		topic:          topic,
+		event:          event,
+		issueID:        issueID,
+		issueShortID:   issueShortID,
+	}
+}
+
+func NewZulipMessage(
+	intentID domain.NotificationIntentID,
+	destinationURL outbound.DestinationURL,
+	botEmail domain.ZulipBotEmail,
+	apiKey domain.ZulipAPIKey,
+	stream domain.ZulipStreamName,
+	topic domain.ZulipTopicName,
+	payload ZulipPayload,
+) ZulipMessage {
+	return ZulipMessage{
+		intentID:       intentID,
+		destinationURL: destinationURL,
+		botEmail:       botEmail,
+		apiKey:         apiKey,
+		stream:         stream,
+		topic:          topic,
+		payload:        payload,
+	}
+}
+
+func NewZulipDeliveredReceipt(status int) ZulipSendReceipt {
+	return ZulipSendReceipt{delivered: true, status: status}
+}
+
+func NewZulipFailedReceipt(status int, reason string) ZulipSendReceipt {
+	return ZulipSendReceipt{
 		delivered: false,
 		status:    status,
 		reason:    reason,
@@ -937,5 +1055,81 @@ func (receipt TeamsSendReceipt) Status() int {
 }
 
 func (receipt TeamsSendReceipt) Reason() string {
+	return receipt.reason
+}
+
+func (delivery ZulipDelivery) IntentID() domain.NotificationIntentID {
+	return delivery.intentID
+}
+
+func (delivery ZulipDelivery) DestinationURL() outbound.DestinationURL {
+	return delivery.destinationURL
+}
+
+func (delivery ZulipDelivery) BotEmail() domain.ZulipBotEmail {
+	return delivery.botEmail
+}
+
+func (delivery ZulipDelivery) APIKey() domain.ZulipAPIKey {
+	return delivery.apiKey
+}
+
+func (delivery ZulipDelivery) Stream() domain.ZulipStreamName {
+	return delivery.stream
+}
+
+func (delivery ZulipDelivery) Topic() domain.ZulipTopicName {
+	return delivery.topic
+}
+
+func (delivery ZulipDelivery) Event() domain.CanonicalEvent {
+	return delivery.event
+}
+
+func (delivery ZulipDelivery) IssueID() domain.IssueID {
+	return delivery.issueID
+}
+
+func (delivery ZulipDelivery) IssueShortID() int64 {
+	return delivery.issueShortID
+}
+
+func (message ZulipMessage) IntentID() domain.NotificationIntentID {
+	return message.intentID
+}
+
+func (message ZulipMessage) DestinationURL() outbound.DestinationURL {
+	return message.destinationURL
+}
+
+func (message ZulipMessage) BotEmail() domain.ZulipBotEmail {
+	return message.botEmail
+}
+
+func (message ZulipMessage) APIKey() domain.ZulipAPIKey {
+	return message.apiKey
+}
+
+func (message ZulipMessage) Stream() domain.ZulipStreamName {
+	return message.stream
+}
+
+func (message ZulipMessage) Topic() domain.ZulipTopicName {
+	return message.topic
+}
+
+func (message ZulipMessage) Payload() ZulipPayload {
+	return message.payload
+}
+
+func (receipt ZulipSendReceipt) Delivered() bool {
+	return receipt.delivered
+}
+
+func (receipt ZulipSendReceipt) Status() int {
+	return receipt.status
+}
+
+func (receipt ZulipSendReceipt) Reason() string {
 	return receipt.reason
 }

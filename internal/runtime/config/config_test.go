@@ -30,6 +30,21 @@ func TestLoadAcceptsServerConfig(t *testing.T) {
 	if !cfg.SMTPEnabled() || cfg.SMTPAddr != "127.0.0.1:2525" || cfg.SMTPFrom != "alerts@example.test" {
 		t.Fatalf("unexpected smtp config: %#v", cfg)
 	}
+
+	if cfg.ArtifactRoot != "" {
+		t.Fatalf("expected unset artifact root, got %q", cfg.ArtifactRoot)
+	}
+}
+
+func TestLoadAcceptsAbsoluteArtifactRoot(t *testing.T) {
+	cfg, cfgErr := Load(replace(validEnv(), "ARTIFACT_ROOT=/var/lib/error-tracker/artifacts"), ModeServer)
+	if cfgErr != nil {
+		t.Fatalf("load config: %v", cfgErr)
+	}
+
+	if cfg.ArtifactRoot != "/var/lib/error-tracker/artifacts" {
+		t.Fatalf("unexpected artifact root: %q", cfg.ArtifactRoot)
+	}
 }
 
 func TestLoadRequiresOnlyDatabaseForMigrate(t *testing.T) {
@@ -186,6 +201,12 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			mode:    ModeWorker,
 			env:     without(validEnv(), "SMTP_USERNAME"),
 			message: "SMTP_USERNAME is required when SMTP_PASSWORD is set",
+		},
+		{
+			name:    "relative artifact root",
+			mode:    ModeServer,
+			env:     replace(validEnv(), "ARTIFACT_ROOT=artifacts"),
+			message: "ARTIFACT_ROOT must be an absolute path",
 		},
 	}
 

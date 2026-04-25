@@ -225,6 +225,223 @@ func TestParseStoreEventAcceptsGoSDKExceptionArray(t *testing.T) {
 	}
 }
 
+func TestParseStoreEventPopulatesJsStacktraceForJavaScriptPlatform(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "javascript",
+			"level": "error",
+			"exception": {
+				"values": [{
+					"type": "TypeError",
+					"value": "bad operand",
+					"stacktrace": {
+						"frames": [
+							{
+								"abs_path": "https://cdn.example.com/app.min.js",
+								"function": "r",
+								"lineno": 1,
+								"colno": 1024,
+								"in_app": true
+							},
+							{
+								"abs_path": "https://cdn.example.com/app.min.js",
+								"function": "renderHome",
+								"lineno": 1,
+								"colno": 2048,
+								"in_app": true
+							}
+						]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	frames := event.JsStacktrace()
+	if len(frames) != 2 {
+		t.Fatalf("expected 2 js stacktrace frames, got %d", len(frames))
+	}
+
+	if frames[0].AbsPath() != "https://cdn.example.com/app.min.js" {
+		t.Fatalf("unexpected abs path: %s", frames[0].AbsPath())
+	}
+
+	if frames[0].Function() != "r" {
+		t.Fatalf("unexpected function: %s", frames[0].Function())
+	}
+
+	if frames[0].GeneratedLine() != 1 || frames[0].GeneratedColumn() != 1024 {
+		t.Fatalf("unexpected first frame position: line=%d column=%d",
+			frames[0].GeneratedLine(), frames[0].GeneratedColumn())
+	}
+
+	if _, hasResolution := frames[0].Resolution(); hasResolution {
+		t.Fatal("expected unresolved frame at ingest time")
+	}
+
+	if frames[1].GeneratedColumn() != 2048 {
+		t.Fatalf("unexpected second frame column: %d", frames[1].GeneratedColumn())
+	}
+}
+
+func TestParseStoreEventPopulatesJsStacktraceForNodePlatform(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "node",
+			"level": "error",
+			"exception": {
+				"values": [{
+					"type": "Error",
+					"value": "boom",
+					"stacktrace": {
+						"frames": [
+							{
+								"filename": "app.js",
+								"function": "main",
+								"lineno": 12,
+								"colno": 5
+							}
+						]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	frames := event.JsStacktrace()
+	if len(frames) != 1 {
+		t.Fatalf("expected 1 js stacktrace frame, got %d", len(frames))
+	}
+
+	if frames[0].AbsPath() != "app.js" {
+		t.Fatalf("expected filename fallback for abs_path, got %s", frames[0].AbsPath())
+	}
+}
+
+func TestParseStoreEventOmitsJsStacktraceForNonJsPlatform(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "python",
+			"level": "error",
+			"exception": {
+				"values": [{
+					"type": "TypeError",
+					"value": "bad operand",
+					"stacktrace": {
+						"frames": [
+							{"filename": "lib.py", "function": "helper", "lineno": 3, "in_app": true}
+						]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	if frames := event.JsStacktrace(); len(frames) != 0 {
+		t.Fatalf("expected no js stacktrace frames for non-js platform, got %d", len(frames))
+	}
+}
+
+func TestParseStoreEventSkipsJsStacktraceFramesWithMissingPath(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "javascript",
+			"level": "error",
+			"exception": {
+				"values": [{
+					"type": "TypeError",
+					"value": "bad operand",
+					"stacktrace": {
+						"frames": [
+							{"function": "anonymous", "lineno": 1, "colno": 5},
+							{"abs_path": "https://cdn.example.com/app.min.js", "lineno": 0, "colno": 5},
+							{"abs_path": "https://cdn.example.com/app.min.js", "function": "ok", "lineno": 7, "colno": 9}
+						]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	frames := event.JsStacktrace()
+	if len(frames) != 1 {
+		t.Fatalf("expected 1 valid js stacktrace frame, got %d", len(frames))
+	}
+
+	if frames[0].Function() != "ok" {
+		t.Fatalf("unexpected surviving frame function: %s", frames[0].Function())
+	}
+}
+
+func TestParseStoreEventOmitsJsStacktraceForTransactionEvent(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "javascript",
+			"type": "transaction",
+			"transaction": "GET /home",
+			"exception": {
+				"values": [{
+					"type": "TypeError",
+					"value": "bad operand",
+					"stacktrace": {
+						"frames": [
+							{"abs_path": "https://cdn.example.com/app.min.js", "function": "r", "lineno": 1, "colno": 5}
+						]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	if event.Kind() != domain.EventKindTransaction {
+		t.Fatalf("expected transaction kind, got %s", event.Kind())
+	}
+
+	if frames := event.JsStacktrace(); len(frames) != 0 {
+		t.Fatalf("expected transaction event to omit js stacktrace frames, got %d", len(frames))
+	}
+}
+
 func projectContext(t *testing.T) ProjectContext {
 	t.Helper()
 

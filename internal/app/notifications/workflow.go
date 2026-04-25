@@ -96,6 +96,18 @@ type TeamsBatchReceipt struct {
 	failed    int
 }
 
+type ZulipBatchCommand struct {
+	now       time.Time
+	limit     int
+	publicURL string
+}
+
+type ZulipBatchReceipt struct {
+	claimed   int
+	delivered int
+	failed    int
+}
+
 func NewTelegramBatchCommand(
 	now time.Time,
 	limit int,
@@ -264,6 +276,30 @@ func NewTeamsBatchCommand(
 	})
 }
 
+func NewZulipBatchCommand(
+	now time.Time,
+	limit int,
+	publicURL string,
+) result.Result[ZulipBatchCommand] {
+	if now.IsZero() {
+		return result.Err[ZulipBatchCommand](errors.New("batch time is required"))
+	}
+
+	if limit < 1 {
+		return result.Err[ZulipBatchCommand](errors.New("batch limit must be positive"))
+	}
+
+	if publicURL == "" {
+		return result.Err[ZulipBatchCommand](errors.New("public url is required"))
+	}
+
+	return result.Ok(ZulipBatchCommand{
+		now:       now.UTC(),
+		limit:     limit,
+		publicURL: publicURL,
+	})
+}
+
 func DeliverTelegramBatch(
 	ctx context.Context,
 	command TelegramBatchCommand,
@@ -410,6 +446,28 @@ func DeliverTeamsBatch(
 	receipt := TeamsBatchReceipt{claimed: len(deliveries)}
 	for _, delivery := range deliveries {
 		nextReceipt := deliverTeamsDelivery(ctx, command, resolver, delivery, outbox, sender, receipt)
+		receipt = nextReceipt
+	}
+
+	return result.Ok(receipt)
+}
+
+func DeliverZulipBatch(
+	ctx context.Context,
+	command ZulipBatchCommand,
+	resolver outbound.Resolver,
+	outbox ZulipOutbox,
+	sender ZulipSender,
+) result.Result[ZulipBatchReceipt] {
+	deliveriesResult := outbox.ClaimZulipDeliveries(ctx, command.now, command.limit)
+	deliveries, deliveriesErr := deliveriesResult.Value()
+	if deliveriesErr != nil {
+		return result.Err[ZulipBatchReceipt](deliveriesErr)
+	}
+
+	receipt := ZulipBatchReceipt{claimed: len(deliveries)}
+	for _, delivery := range deliveries {
+		nextReceipt := deliverZulipDelivery(ctx, command, resolver, delivery, outbox, sender, receipt)
 		receipt = nextReceipt
 	}
 
@@ -745,6 +803,57 @@ func deliverTeamsDelivery(
 	}
 }
 
+func deliverZulipDelivery(
+	ctx context.Context,
+	command ZulipBatchCommand,
+	resolver outbound.Resolver,
+	delivery ZulipDelivery,
+	outbox ZulipOutbox,
+	sender ZulipSender,
+	receipt ZulipBatchReceipt,
+) ZulipBatchReceipt {
+	resolvedResult := outbound.ValidateResolvedDestination(ctx, resolver, delivery.destinationURL)
+	_, resolvedErr := resolvedResult.Value()
+	if resolvedErr != nil {
+		sendReceipt := NewZulipFailedReceipt(0, resolvedErr.Error())
+		return markZulipFailure(ctx, outbox, delivery.intentID, command.now, sendReceipt, receipt)
+	}
+
+	messageResult := zulipMessage(delivery, command.publicURL)
+	message, messageErr := messageResult.Value()
+	if messageErr != nil {
+		sendReceipt := NewZulipFailedReceipt(0, messageErr.Error())
+		return markZulipFailure(ctx, outbox, delivery.intentID, command.now, sendReceipt, receipt)
+	}
+
+	sendResult := sender.SendZulip(ctx, message)
+	sendReceipt, sendErr := sendResult.Value()
+	if sendErr != nil {
+		failureReceipt := NewZulipFailedReceipt(0, sendErr.Error())
+		return markZulipFailure(ctx, outbox, delivery.intentID, command.now, failureReceipt, receipt)
+	}
+
+	if !sendReceipt.Delivered() {
+		return markZulipFailure(ctx, outbox, delivery.intentID, command.now, sendReceipt, receipt)
+	}
+
+	markResult := outbox.MarkZulipDelivered(ctx, delivery.intentID, command.now, sendReceipt)
+	_, markErr := markResult.Value()
+	if markErr != nil {
+		return ZulipBatchReceipt{
+			claimed:   receipt.claimed,
+			delivered: receipt.delivered,
+			failed:    receipt.failed + 1,
+		}
+	}
+
+	return ZulipBatchReceipt{
+		claimed:   receipt.claimed,
+		delivered: receipt.delivered + 1,
+		failed:    receipt.failed,
+	}
+}
+
 func telegramMessage(
 	delivery TelegramDelivery,
 	publicURL string,
@@ -956,6 +1065,46 @@ func teamsMessage(
 	return result.Ok(NewTeamsMessage(delivery.intentID, delivery.destinationURL, payload))
 }
 
+func zulipMessage(
+	delivery ZulipDelivery,
+	publicURL string,
+) result.Result[ZulipMessage] {
+	openedResult := notifyplan.NewIssueOpened(
+		delivery.event,
+		delivery.issueID,
+		delivery.issueShortID,
+	)
+	opened, openedErr := openedResult.Value()
+	if openedErr != nil {
+		return result.Err[ZulipMessage](openedErr)
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	if baseURL == "" {
+		return result.Err[ZulipMessage](errors.New("public url is required"))
+	}
+
+	payload := ZulipPayload{
+		EventID:      opened.Event().EventID().String(),
+		IssueID:      opened.IssueID().String(),
+		IssueShortID: opened.IssueShortID(),
+		Title:        opened.Event().Title().String(),
+		Level:        opened.Event().Level().String(),
+		Platform:     opened.Event().Platform(),
+		IssueURL:     baseURL + "/issues/" + opened.IssueID().String(),
+	}
+
+	return result.Ok(NewZulipMessage(
+		delivery.intentID,
+		delivery.destinationURL,
+		delivery.botEmail,
+		delivery.apiKey,
+		delivery.stream,
+		delivery.topic,
+		payload,
+	))
+}
+
 func markTelegramFailure(
 	ctx context.Context,
 	outbox TelegramOutbox,
@@ -1082,6 +1231,24 @@ func markTeamsFailure(
 	}
 }
 
+func markZulipFailure(
+	ctx context.Context,
+	outbox ZulipOutbox,
+	intentID domain.NotificationIntentID,
+	now time.Time,
+	sendReceipt ZulipSendReceipt,
+	receipt ZulipBatchReceipt,
+) ZulipBatchReceipt {
+	markResult := outbox.MarkZulipFailed(ctx, intentID, now, sendReceipt)
+	_, _ = markResult.Value()
+
+	return ZulipBatchReceipt{
+		claimed:   receipt.claimed,
+		delivered: receipt.delivered,
+		failed:    receipt.failed + 1,
+	}
+}
+
 func (receipt TelegramBatchReceipt) Claimed() int {
 	return receipt.claimed
 }
@@ -1163,5 +1330,17 @@ func (receipt TeamsBatchReceipt) Delivered() int {
 }
 
 func (receipt TeamsBatchReceipt) Failed() int {
+	return receipt.failed
+}
+
+func (receipt ZulipBatchReceipt) Claimed() int {
+	return receipt.claimed
+}
+
+func (receipt ZulipBatchReceipt) Delivered() int {
+	return receipt.delivered
+}
+
+func (receipt ZulipBatchReceipt) Failed() int {
 	return receipt.failed
 }

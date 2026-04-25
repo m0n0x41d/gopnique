@@ -31,184 +31,241 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 		if message.Text != "" {
 			<div class={ messageClass(message) }>{ message.Text }</div>
 		}
-		<section class="detail-grid">
+		<section>
 			<div class="card">
 				<div class="card__head">
-					<span class="eyebrow">Telegram destination</span>
+					<span class="eyebrow">Create destination</span>
+					<span class="chip">{ providerCountLabel() }</span>
 				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/telegram-destinations"
-						class="form"
-						hx-post="/settings/notifications/telegram-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Chat ID</span>
-							<input name="chat_id" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save destination</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">Webhook destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/webhook-destinations"
-						class="form"
-						hx-post="/settings/notifications/webhook-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>URL</span>
-							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save webhook</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">Email destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/email-destinations"
-						class="form"
-						hx-post="/settings/notifications/email-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
+				<div class="provider-accordion">
+					<details class="provider-panel" open>
+						<summary>
+							<span>Telegram</span>
+							<span class="chip">bot chat</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/telegram-destinations"
+								class="form"
+								hx-post="/settings/notifications/telegram-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Chat ID</span>
+									<input name="chat_id" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save destination</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>Webhook</span>
+							<span class="chip">generic HTTP</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/webhook-destinations"
+								class="form"
+								hx-post="/settings/notifications/webhook-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save webhook</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
 							<span>Email</span>
-							<input class="input--mono" name="address" type="email" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save email</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">Discord destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/discord-destinations"
-						class="form"
-						hx-post="/settings/notifications/discord-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Webhook URL</span>
-							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save Discord</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">Google Chat destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/google-chat-destinations"
-						class="form"
-						hx-post="/settings/notifications/google-chat-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Webhook URL</span>
-							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save Google Chat</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">ntfy destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/ntfy-destinations"
-						class="form"
-						hx-post="/settings/notifications/ntfy-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Server URL</span>
-							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Topic</span>
-							<input class="input--mono" name="topic" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save ntfy</button>
-					</form>
-				</div>
-			</div>
-			<div class="card">
-				<div class="card__head">
-					<span class="eyebrow">Microsoft Teams destination</span>
-				</div>
-				<div class="card__body">
-					<form
-						method="post"
-						action="/settings/notifications/teams-destinations"
-						class="form"
-						hx-post="/settings/notifications/teams-destinations"
-						hx-target="#notification-settings"
-						hx-swap="outerHTML"
-					>
-						<label>
-							<span>Label</span>
-							<input name="label" autocomplete="off" required/>
-						</label>
-						<label>
-							<span>Webhook URL</span>
-							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
-						</label>
-						<button class="btn btn--primary" type="submit">Save Teams</button>
-					</form>
+							<span class="chip">SMTP</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/email-destinations"
+								class="form"
+								hx-post="/settings/notifications/email-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Email</span>
+									<input class="input--mono" name="address" type="email" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save email</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>Discord</span>
+							<span class="chip">webhook</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/discord-destinations"
+								class="form"
+								hx-post="/settings/notifications/discord-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Webhook URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save Discord</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>Google Chat</span>
+							<span class="chip">webhook</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/google-chat-destinations"
+								class="form"
+								hx-post="/settings/notifications/google-chat-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Webhook URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save Google Chat</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>ntfy</span>
+							<span class="chip">topic</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/ntfy-destinations"
+								class="form"
+								hx-post="/settings/notifications/ntfy-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Server URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Topic</span>
+									<input class="input--mono" name="topic" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save ntfy</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>Microsoft Teams</span>
+							<span class="chip">webhook</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/teams-destinations"
+								class="form"
+								hx-post="/settings/notifications/teams-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Webhook URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save Teams</button>
+							</form>
+						</div>
+					</details>
+					<details class="provider-panel">
+						<summary>
+							<span>Zulip</span>
+							<span class="chip">stream</span>
+						</summary>
+						<div class="provider-panel__body">
+							<form
+								method="post"
+								action="/settings/notifications/zulip-destinations"
+								class="form"
+								hx-post="/settings/notifications/zulip-destinations"
+								hx-target="#notification-settings"
+								hx-swap="outerHTML"
+							>
+								<label>
+									<span>Label</span>
+									<input name="label" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Zulip URL</span>
+									<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Bot email</span>
+									<input class="input--mono" name="bot_email" type="email" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>API key</span>
+									<input class="input--mono" name="api_key" type="password" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Stream</span>
+									<input class="input--mono" name="stream" autocomplete="off" required/>
+								</label>
+								<label>
+									<span>Topic</span>
+									<input class="input--mono" name="topic" autocomplete="off" required/>
+								</label>
+								<button class="btn btn--primary" type="submit">Save Zulip</button>
+							</form>
+						</div>
+					</details>
 				</div>
 			</div>
 		</section>
@@ -256,6 +313,9 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 								}
 								for _, destination := range view.TeamsDestinations {
 									<option value={ destinationOptionValue("microsoft_teams", destination.ID) }>{ destination.Label } · Microsoft Teams</option>
+								}
+								for _, destination := range view.ZulipDestinations {
+									<option value={ destinationOptionValue("zulip", destination.ID) }>{ destination.Label } · Zulip</option>
 								}
 							</select>
 						</label>
@@ -497,6 +557,44 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 			</div>
 			<div class="card">
 				<div class="card__head">
+					<span class="eyebrow">Zulip</span>
+					<span class="chip">{ zulipDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.ZulipDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Bot email</th>
+									<th>Stream</th>
+									<th>Topic</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.ZulipDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td class="mono">{ destination.BotEmail }</td>
+										<td class="mono">{ destination.Stream }</td>
+										<td class="mono">{ destination.Topic }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
 					<span class="eyebrow">Rules</span>
 					<span class="chip">{ alertCountLabel(view) }</span>
 				</div>
@@ -688,8 +786,12 @@ func destinationOptionValue(provider string, id string) string {
 	return provider + ":" + id
 }
 
+func providerCountLabel() string {
+	return "8 providers"
+}
+
 func destinationCount(view settingsapp.ProjectSettingsView) int {
-	return len(view.TelegramDestinations) + len(view.WebhookDestinations) + len(view.EmailDestinations) + len(view.DiscordDestinations) + len(view.GoogleChatDestinations) + len(view.NtfyDestinations) + len(view.TeamsDestinations)
+	return len(view.TelegramDestinations) + len(view.WebhookDestinations) + len(view.EmailDestinations) + len(view.DiscordDestinations) + len(view.GoogleChatDestinations) + len(view.NtfyDestinations) + len(view.TeamsDestinations) + len(view.ZulipDestinations)
 }
 
 func telegramDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
@@ -742,6 +844,14 @@ func ntfyDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
 
 func teamsDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
 	if len(view.TeamsDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func zulipDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.ZulipDestinations) == 1 {
 		return "1 destination"
 	}
 

@@ -42,6 +42,10 @@ type CanonicalEventParams struct {
 	Tags                 map[string]string
 	DefaultGroupingParts []string
 	ExplicitFingerprint  []string
+	Attachments          []EventAttachment
+	JsStacktrace         []JsStacktraceFrame
+	NativeModules        []NativeModule
+	NativeFrames         []NativeFrame
 }
 
 type CanonicalEvent struct {
@@ -59,6 +63,10 @@ type CanonicalEvent struct {
 	tags                 map[string]string
 	defaultGroupingParts []string
 	explicitFingerprint  []string
+	attachments          []EventAttachment
+	jsStacktrace         []JsStacktraceFrame
+	nativeModules        []NativeModule
+	nativeFrames         []NativeFrame
 }
 
 func NewEventTitle(input string) (EventTitle, error) {
@@ -138,6 +146,10 @@ func NewCanonicalEvent(params CanonicalEventParams) (CanonicalEvent, error) {
 		tags:                 normalizeTags(params.Tags),
 		defaultGroupingParts: defaultParts,
 		explicitFingerprint:  normalizeParts(params.ExplicitFingerprint),
+		attachments:          copyEventAttachments(params.Attachments),
+		jsStacktrace:         copyJsStacktraceFrames(params.JsStacktrace),
+		nativeModules:        copyNativeModules(params.NativeModules),
+		nativeFrames:         copyNativeFrames(params.NativeFrames),
 	}, nil
 }
 
@@ -223,6 +235,28 @@ func (event CanonicalEvent) DefaultGroupingParts() []string {
 
 func (event CanonicalEvent) ExplicitFingerprint() []string {
 	return append([]string{}, event.explicitFingerprint...)
+}
+
+func (event CanonicalEvent) Attachments() []EventAttachment {
+	return copyEventAttachments(event.attachments)
+}
+
+func (event CanonicalEvent) JsStacktrace() []JsStacktraceFrame {
+	return copyJsStacktraceFrames(event.jsStacktrace)
+}
+
+func (event CanonicalEvent) WithJsStacktrace(frames []JsStacktraceFrame) CanonicalEvent {
+	updated := event
+	updated.jsStacktrace = copyJsStacktraceFrames(frames)
+	return updated
+}
+
+func (event CanonicalEvent) NativeModules() []NativeModule {
+	return copyNativeModules(event.nativeModules)
+}
+
+func (event CanonicalEvent) NativeFrames() []NativeFrame {
+	return copyNativeFrames(event.nativeFrames)
 }
 
 func normalizeParts(parts []string) []string {

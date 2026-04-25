@@ -72,7 +72,7 @@ func (store *Store) MigrationStatus(ctx context.Context) (health.MigrationStatus
 		return health.MigrationStatus{}, scanErr
 	}
 
-	status.Ready = status.AppliedCount >= 25
+	status.Ready = status.AppliedCount >= 26
 
 	return status, nil
 }
@@ -334,7 +334,126 @@ func canonicalPayloadJSON(event ingestplan.AcceptedEvent) ([]byte, error) {
 		},
 	}
 
+	attachments := canonical.Attachments()
+	if len(attachments) > 0 {
+		encoded := make([]map[string]any, 0, len(attachments))
+		for _, attachment := range attachments {
+			entry := map[string]any{
+				"kind":      attachment.Kind().String(),
+				"name":      attachment.Name().String(),
+				"byte_size": attachment.ByteSize(),
+			}
+
+			if contentType := attachment.ContentType(); contentType != "" {
+				entry["content_type"] = contentType
+			}
+
+			encoded = append(encoded, entry)
+		}
+
+		payload["attachments"] = encoded
+	}
+
+	if encoded := encodeJsStacktrace(canonical.JsStacktrace()); encoded != nil {
+		payload["js_stacktrace"] = encoded
+	}
+
+	if encoded := encodeNativeReferences(canonical.NativeModules(), canonical.NativeFrames()); encoded != nil {
+		payload["native"] = encoded
+	}
+
 	return json.Marshal(payload)
+}
+
+func encodeJsStacktrace(frames []domain.JsStacktraceFrame) []map[string]any {
+	if len(frames) == 0 {
+		return nil
+	}
+
+	encoded := make([]map[string]any, 0, len(frames))
+	for _, frame := range frames {
+		entry := map[string]any{
+			"abs_path": frame.AbsPath(),
+			"generated": map[string]any{
+				"line":   frame.GeneratedLine(),
+				"column": frame.GeneratedColumn(),
+			},
+		}
+
+		if function := frame.Function(); function != "" {
+			entry["function"] = function
+		}
+
+		if resolution, hasResolution := frame.Resolution(); hasResolution {
+			resolved := map[string]any{
+				"source": resolution.Source(),
+				"line":   resolution.OriginalLine(),
+				"column": resolution.OriginalColumn(),
+			}
+
+			if symbol := resolution.Symbol(); symbol != "" {
+				resolved["symbol"] = symbol
+			}
+
+			entry["resolved"] = resolved
+		}
+
+		encoded = append(encoded, entry)
+	}
+
+	return encoded
+}
+
+func encodeNativeReferences(
+	modules []domain.NativeModule,
+	frames []domain.NativeFrame,
+) map[string]any {
+	if len(modules) == 0 && len(frames) == 0 {
+		return nil
+	}
+
+	native := map[string]any{}
+
+	if len(modules) > 0 {
+		encoded := make([]map[string]any, 0, len(modules))
+		for _, module := range modules {
+			encoded = append(encoded, map[string]any{
+				"debug_id":   module.DebugID().String(),
+				"code_file":  module.CodeFile(),
+				"image_addr": module.ImageAddr(),
+				"image_size": module.ImageSize(),
+			})
+		}
+
+		native["modules"] = encoded
+	}
+
+	if len(frames) > 0 {
+		encoded := make([]map[string]any, 0, len(frames))
+		for _, frame := range frames {
+			entry := map[string]any{
+				"instruction_addr": frame.InstructionAddr(),
+			}
+
+			if debugID, hasModule := frame.ModuleDebugID(); hasModule {
+				entry["module_debug_id"] = debugID.String()
+			}
+
+			if function := frame.Function(); function != "" {
+				entry["function"] = function
+			}
+
+			if pkg := frame.Package(); pkg != "" {
+				entry["package"] = pkg
+			}
+
+			encoded = append(encoded, entry)
+		}
+
+		native["frames"] = encoded
+	}
+
+	return native
 }
 
 func (store txStore) insertEventTags(

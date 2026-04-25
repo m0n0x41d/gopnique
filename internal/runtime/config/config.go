@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -37,6 +38,7 @@ type Config struct {
 	SMTPFrom              string
 	NotificationBatchSize int
 	RetentionBatchSize    int
+	ArtifactRoot          string
 }
 
 func Load(env []string, mode Mode) (Config, error) {
@@ -73,6 +75,7 @@ func Load(env []string, mode Mode) (Config, error) {
 		SMTPFrom:              strings.TrimSpace(values["SMTP_FROM"]),
 		NotificationBatchSize: notificationBatchSize,
 		RetentionBatchSize:    retentionBatchSize,
+		ArtifactRoot:          strings.TrimSpace(values["ARTIFACT_ROOT"]),
 	}
 
 	err := validate(cfg)
@@ -181,6 +184,23 @@ func validate(cfg Config) error {
 	smtpErr := validateSMTP(cfg)
 	if smtpErr != nil {
 		return smtpErr
+	}
+
+	artifactRootErr := validateArtifactRoot(cfg.ArtifactRoot)
+	if artifactRootErr != nil {
+		return artifactRootErr
+	}
+
+	return nil
+}
+
+func validateArtifactRoot(input string) error {
+	if input == "" {
+		return nil
+	}
+
+	if !filepath.IsAbs(input) {
+		return errors.New("ARTIFACT_ROOT must be an absolute path")
 	}
 
 	return nil

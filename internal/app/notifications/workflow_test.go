@@ -386,6 +386,58 @@ func TestDeliverTeamsBatchRejectsUnsafeSendTimeResolution(t *testing.T) {
 	}
 }
 
+func TestDeliverZulipBatchSendsAndMarksDelivered(t *testing.T) {
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	outbox := &fakeZulipOutbox{deliveries: []ZulipDelivery{zulipDelivery(t, "https://zulip.example.com")}}
+	resolver := fakeResolver{"zulip.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
+	sender := &fakeZulipSender{receipt: NewZulipDeliveredReceipt(200)}
+	command := zulipBatchCommand(t, now)
+
+	batchResult := DeliverZulipBatch(context.Background(), command, resolver, outbox, sender)
+	receipt, receiptErr := batchResult.Value()
+	if receiptErr != nil {
+		t.Fatalf("batch: %v", receiptErr)
+	}
+
+	if receipt.Claimed() != 1 || receipt.Delivered() != 1 || receipt.Failed() != 0 {
+		t.Fatalf("unexpected receipt: %#v", receipt)
+	}
+
+	if outbox.deliveredStatus != 200 {
+		t.Fatalf("expected delivered status 200, got %d", outbox.deliveredStatus)
+	}
+
+	if sender.payload.EventID == "" || sender.payload.IssueURL == "" || sender.stream == "" || sender.topic == "" {
+		t.Fatalf("expected zulip payload, got payload=%#v stream=%q topic=%q", sender.payload, sender.stream, sender.topic)
+	}
+}
+
+func TestDeliverZulipBatchRejectsUnsafeSendTimeResolution(t *testing.T) {
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	outbox := &fakeZulipOutbox{deliveries: []ZulipDelivery{zulipDelivery(t, "https://zulip.example.com")}}
+	resolver := fakeResolver{"zulip.example.com": []netip.Addr{netip.MustParseAddr("10.0.0.10")}}
+	sender := &fakeZulipSender{receipt: NewZulipDeliveredReceipt(200)}
+	command := zulipBatchCommand(t, now)
+
+	batchResult := DeliverZulipBatch(context.Background(), command, resolver, outbox, sender)
+	receipt, receiptErr := batchResult.Value()
+	if receiptErr != nil {
+		t.Fatalf("batch: %v", receiptErr)
+	}
+
+	if receipt.Claimed() != 1 || receipt.Delivered() != 0 || receipt.Failed() != 1 {
+		t.Fatalf("unexpected receipt: %#v", receipt)
+	}
+
+	if sender.sent != 0 {
+		t.Fatalf("expected no zulip send, got %d", sender.sent)
+	}
+
+	if outbox.failedReason == "" {
+		t.Fatal("expected zulip failure reason")
+	}
+}
+
 type fakeOutbox struct {
 	deliveries []TelegramDelivery
 	delivered  int
@@ -648,6 +700,44 @@ func (outbox *fakeTeamsOutbox) MarkTeamsFailed(
 	return result.Ok(struct{}{})
 }
 
+type fakeZulipOutbox struct {
+	deliveries      []ZulipDelivery
+	deliveredStatus int
+	failedStatus    int
+	failedReason    string
+}
+
+func (outbox *fakeZulipOutbox) ClaimZulipDeliveries(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) result.Result[[]ZulipDelivery] {
+	return result.Ok(outbox.deliveries)
+}
+
+func (outbox *fakeZulipOutbox) MarkZulipDelivered(
+	ctx context.Context,
+	intentID domain.NotificationIntentID,
+	now time.Time,
+	receipt ZulipSendReceipt,
+) result.Result[struct{}] {
+	outbox.deliveredStatus = receipt.Status()
+
+	return result.Ok(struct{}{})
+}
+
+func (outbox *fakeZulipOutbox) MarkZulipFailed(
+	ctx context.Context,
+	intentID domain.NotificationIntentID,
+	now time.Time,
+	receipt ZulipSendReceipt,
+) result.Result[struct{}] {
+	outbox.failedStatus = receipt.Status()
+	outbox.failedReason = receipt.Reason()
+
+	return result.Ok(struct{}{})
+}
+
 type fakeSender struct {
 	sendErr  error
 	sentText string
@@ -769,6 +859,26 @@ func (sender *fakeTeamsSender) SendTeams(
 	return result.Ok(sender.receipt)
 }
 
+type fakeZulipSender struct {
+	receipt ZulipSendReceipt
+	sent    int
+	stream  string
+	topic   string
+	payload ZulipPayload
+}
+
+func (sender *fakeZulipSender) SendZulip(
+	ctx context.Context,
+	message ZulipMessage,
+) result.Result[ZulipSendReceipt] {
+	sender.sent++
+	sender.stream = message.Stream().String()
+	sender.topic = message.Topic().String()
+	sender.payload = message.Payload()
+
+	return result.Ok(sender.receipt)
+}
+
 type fakeResolver map[string][]netip.Addr
 
 func (resolver fakeResolver) LookupHost(
@@ -859,6 +969,18 @@ func teamsBatchCommand(t *testing.T, now time.Time) TeamsBatchCommand {
 	t.Helper()
 
 	commandResult := NewTeamsBatchCommand(now, 10, "http://127.0.0.1:8085")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("command: %v", commandErr)
+	}
+
+	return command
+}
+
+func zulipBatchCommand(t *testing.T, now time.Time) ZulipBatchCommand {
+	t.Helper()
+
+	commandResult := NewZulipBatchCommand(now, 10, "http://127.0.0.1:8085")
 	command, commandErr := commandResult.Value()
 	if commandErr != nil {
 		t.Fatalf("command: %v", commandErr)
@@ -994,6 +1116,29 @@ func teamsDelivery(t *testing.T, destination string) TeamsDelivery {
 	)
 }
 
+func zulipDelivery(t *testing.T, destination string) ZulipDelivery {
+	t.Helper()
+
+	intentID := mustID(t, domain.NewNotificationIntentID, "44444444-4444-4444-a444-444444444444")
+	destinationResult := outbound.ParseDestinationURL(destination)
+	destinationURL, destinationErr := destinationResult.Value()
+	if destinationErr != nil {
+		t.Fatalf("destination url: %v", destinationErr)
+	}
+
+	return NewZulipDelivery(
+		intentID,
+		destinationURL,
+		zulipBotEmail(t, "bot@example.test"),
+		zulipAPIKey(t, "zulip-key"),
+		zulipStream(t, "ops"),
+		zulipTopic(t, "alerts"),
+		issueEvent(t),
+		issueID(t),
+		7,
+	)
+}
+
 func issueEvent(t *testing.T) domain.CanonicalEvent {
 	t.Helper()
 
@@ -1062,6 +1207,50 @@ func ntfyTopic(t *testing.T, input string) domain.NtfyTopic {
 	topic, topicErr := domain.NewNtfyTopic(input)
 	if topicErr != nil {
 		t.Fatalf("ntfy topic: %v", topicErr)
+	}
+
+	return topic
+}
+
+func zulipBotEmail(t *testing.T, input string) domain.ZulipBotEmail {
+	t.Helper()
+
+	email, emailErr := domain.NewZulipBotEmail(input)
+	if emailErr != nil {
+		t.Fatalf("zulip bot email: %v", emailErr)
+	}
+
+	return email
+}
+
+func zulipAPIKey(t *testing.T, input string) domain.ZulipAPIKey {
+	t.Helper()
+
+	key, keyErr := domain.NewZulipAPIKey(input)
+	if keyErr != nil {
+		t.Fatalf("zulip api key: %v", keyErr)
+	}
+
+	return key
+}
+
+func zulipStream(t *testing.T, input string) domain.ZulipStreamName {
+	t.Helper()
+
+	stream, streamErr := domain.NewZulipStreamName(input)
+	if streamErr != nil {
+		t.Fatalf("zulip stream: %v", streamErr)
+	}
+
+	return stream
+}
+
+func zulipTopic(t *testing.T, input string) domain.ZulipTopicName {
+	t.Helper()
+
+	topic, topicErr := domain.NewZulipTopicName(input)
+	if topicErr != nil {
+		t.Fatalf("zulip topic: %v", topicErr)
 	}
 
 	return topic

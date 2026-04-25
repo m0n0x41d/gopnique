@@ -18,6 +18,7 @@ type Manager interface {
 	CreateGoogleChatDestination(ctx context.Context, command AddGoogleChatDestinationCommand) result.Result[SettingsMutationResult]
 	CreateNtfyDestination(ctx context.Context, command AddNtfyDestinationCommand) result.Result[SettingsMutationResult]
 	CreateTeamsDestination(ctx context.Context, command AddTeamsDestinationCommand) result.Result[SettingsMutationResult]
+	CreateZulipDestination(ctx context.Context, command AddZulipDestinationCommand) result.Result[SettingsMutationResult]
 	CreateIssueOpenedAlert(ctx context.Context, command AddIssueOpenedAlertCommand) result.Result[SettingsMutationResult]
 	SetIssueOpenedAlertStatus(ctx context.Context, command SetIssueOpenedAlertStatusCommand) result.Result[SettingsMutationResult]
 }
@@ -74,6 +75,16 @@ type AddTeamsDestinationCommand struct {
 	Label string
 }
 
+type AddZulipDestinationCommand struct {
+	Scope    Scope
+	URL      string
+	BotEmail string
+	APIKey   string
+	Stream   string
+	Topic    string
+	Label    string
+}
+
 type AddIssueOpenedAlertCommand struct {
 	Scope         Scope
 	Provider      domain.AlertActionProvider
@@ -103,6 +114,7 @@ type ProjectSettingsView struct {
 	GoogleChatDestinations []GoogleChatDestinationView
 	NtfyDestinations       []NtfyDestinationView
 	TeamsDestinations      []TeamsDestinationView
+	ZulipDestinations      []ZulipDestinationView
 	IssueOpenedAlerts      []IssueOpenedAlertView
 	DeliveryIntents        []DeliveryIntentView
 	RetentionPolicy        RetentionPolicyView
@@ -158,6 +170,16 @@ type TeamsDestinationView struct {
 	Label  string
 	URL    string
 	Status string
+}
+
+type ZulipDestinationView struct {
+	ID       string
+	Label    string
+	URL      string
+	BotEmail string
+	Stream   string
+	Topic    string
+	Status   string
 }
 
 type IssueOpenedAlertView struct {
@@ -409,6 +431,41 @@ func AddTeamsDestination(
 			Scope: command.Scope,
 			URL:   destination.String(),
 			Label: command.Label,
+		},
+	)
+}
+
+func AddZulipDestination(
+	ctx context.Context,
+	resolver outbound.Resolver,
+	manager Manager,
+	command AddZulipDestinationCommand,
+) result.Result[SettingsMutationResult] {
+	if manager == nil {
+		return result.Err[SettingsMutationResult](errors.New("settings manager is required"))
+	}
+
+	scopeErr := requireScope(command.Scope)
+	if scopeErr != nil {
+		return result.Err[SettingsMutationResult](scopeErr)
+	}
+
+	destinationResult := outbound.ValidateDestination(ctx, resolver, command.URL)
+	destination, destinationErr := destinationResult.Value()
+	if destinationErr != nil {
+		return result.Err[SettingsMutationResult](destinationErr)
+	}
+
+	return manager.CreateZulipDestination(
+		ctx,
+		AddZulipDestinationCommand{
+			Scope:    command.Scope,
+			URL:      destination.String(),
+			BotEmail: command.BotEmail,
+			APIKey:   command.APIKey,
+			Stream:   command.Stream,
+			Topic:    command.Topic,
+			Label:    command.Label,
 		},
 	)
 }

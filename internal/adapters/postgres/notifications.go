@@ -125,6 +125,26 @@ type TeamsDestinationResult struct {
 	Label         string
 }
 
+type ZulipDestinationInput struct {
+	ProjectRef string
+	URL        string
+	BotEmail   string
+	APIKey     string
+	Stream     string
+	Topic      string
+	Label      string
+}
+
+type ZulipDestinationResult struct {
+	DestinationID string
+	ProjectID     string
+	URL           string
+	BotEmail      string
+	Stream        string
+	Topic         string
+	Label         string
+}
+
 func (store *Store) AddTelegramDestination(
 	ctx context.Context,
 	input TelegramDestinationInput,
@@ -516,6 +536,101 @@ func (store *Store) CreateTeamsDestination(
 	return result.Ok(settingsapp.SettingsMutationResult{DestinationID: destination.DestinationID})
 }
 
+func (store *Store) AddZulipDestination(
+	ctx context.Context,
+	input ZulipDestinationInput,
+) (ZulipDestinationResult, error) {
+	projectRef, refErr := domain.NewProjectRef(input.ProjectRef)
+	if refErr != nil {
+		return ZulipDestinationResult{}, refErr
+	}
+
+	destinationResult := outbound.ParseDestinationURL(input.URL)
+	destinationURL, destinationErr := destinationResult.Value()
+	if destinationErr != nil {
+		return ZulipDestinationResult{}, destinationErr
+	}
+
+	botEmail, botEmailErr := domain.NewZulipBotEmail(input.BotEmail)
+	if botEmailErr != nil {
+		return ZulipDestinationResult{}, botEmailErr
+	}
+
+	apiKey, apiKeyErr := domain.NewZulipAPIKey(input.APIKey)
+	if apiKeyErr != nil {
+		return ZulipDestinationResult{}, apiKeyErr
+	}
+
+	stream, streamErr := domain.NewZulipStreamName(input.Stream)
+	if streamErr != nil {
+		return ZulipDestinationResult{}, streamErr
+	}
+
+	topic, topicErr := domain.NewZulipTopicName(input.Topic)
+	if topicErr != nil {
+		return ZulipDestinationResult{}, topicErr
+	}
+
+	label, labelErr := domain.NewZulipDestinationLabel(input.Label)
+	if labelErr != nil {
+		return ZulipDestinationResult{}, labelErr
+	}
+
+	projectResult, projectErr := store.findProjectByRef(ctx, projectRef)
+	if projectErr != nil {
+		return ZulipDestinationResult{}, projectErr
+	}
+
+	return store.addZulipDestinationForProject(ctx, projectResult, destinationURL, botEmail, apiKey, stream, topic, label)
+}
+
+func (store *Store) CreateZulipDestination(
+	ctx context.Context,
+	command settingsapp.AddZulipDestinationCommand,
+) result.Result[settingsapp.SettingsMutationResult] {
+	destinationResult := outbound.ParseDestinationURL(command.URL)
+	destinationURL, destinationErr := destinationResult.Value()
+	if destinationErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](destinationErr)
+	}
+
+	botEmail, botEmailErr := domain.NewZulipBotEmail(command.BotEmail)
+	if botEmailErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](botEmailErr)
+	}
+
+	apiKey, apiKeyErr := domain.NewZulipAPIKey(command.APIKey)
+	if apiKeyErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](apiKeyErr)
+	}
+
+	stream, streamErr := domain.NewZulipStreamName(command.Stream)
+	if streamErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](streamErr)
+	}
+
+	topic, topicErr := domain.NewZulipTopicName(command.Topic)
+	if topicErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](topicErr)
+	}
+
+	label, labelErr := domain.NewZulipDestinationLabel(command.Label)
+	if labelErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](labelErr)
+	}
+
+	project := projectRefResult{
+		OrganizationID: command.Scope.OrganizationID,
+		ProjectID:      command.Scope.ProjectID,
+	}
+	destination, addErr := store.addZulipDestinationForProject(ctx, project, destinationURL, botEmail, apiKey, stream, topic, label)
+	if addErr != nil {
+		return result.Err[settingsapp.SettingsMutationResult](addErr)
+	}
+
+	return result.Ok(settingsapp.SettingsMutationResult{DestinationID: destination.DestinationID})
+}
+
 func (store *Store) CreateIssueOpenedAlert(
 	ctx context.Context,
 	command settingsapp.AddIssueOpenedAlertCommand,
@@ -564,6 +679,13 @@ func (store *Store) CreateIssueOpenedAlert(
 
 	if command.Provider == domain.AlertActionProviderTeams {
 		_, destinationErr := domain.NewTeamsDestinationID(command.DestinationID)
+		if destinationErr != nil {
+			return result.Err[settingsapp.SettingsMutationResult](destinationErr)
+		}
+	}
+
+	if command.Provider == domain.AlertActionProviderZulip {
+		_, destinationErr := domain.NewZulipDestinationID(command.DestinationID)
 		if destinationErr != nil {
 			return result.Err[settingsapp.SettingsMutationResult](destinationErr)
 		}
@@ -683,6 +805,12 @@ func (store *Store) ShowProjectSettings(
 		return result.Err[settingsapp.ProjectSettingsView](teamsErr)
 	}
 
+	zulipResult := store.listZulipDestinations(ctx, query.Scope)
+	zulip, zulipErr := zulipResult.Value()
+	if zulipErr != nil {
+		return result.Err[settingsapp.ProjectSettingsView](zulipErr)
+	}
+
 	alertsResult := store.listIssueOpenedAlerts(ctx, query.Scope)
 	alerts, alertsErr := alertsResult.Value()
 	if alertsErr != nil {
@@ -721,6 +849,7 @@ func (store *Store) ShowProjectSettings(
 		GoogleChatDestinations: googleChat,
 		NtfyDestinations:       ntfy,
 		TeamsDestinations:      teams,
+		ZulipDestinations:      zulip,
 		IssueOpenedAlerts:      alerts,
 		DeliveryIntents:        deliveries,
 		RetentionPolicy:        retention,
@@ -1420,6 +1549,123 @@ order by created_at asc, label asc
 	return result.Ok(destinations)
 }
 
+func (store *Store) addZulipDestinationForProject(
+	ctx context.Context,
+	project projectRefResult,
+	destinationURL outbound.DestinationURL,
+	botEmail domain.ZulipBotEmail,
+	apiKey domain.ZulipAPIKey,
+	stream domain.ZulipStreamName,
+	topic domain.ZulipTopicName,
+	label domain.ZulipDestinationLabel,
+) (ZulipDestinationResult, error) {
+	destinationID, destinationErr := randomUUID()
+	if destinationErr != nil {
+		return ZulipDestinationResult{}, destinationErr
+	}
+
+	query := `
+insert into zulip_destinations (
+  id,
+  organization_id,
+  project_id,
+  label,
+  url,
+  bot_email,
+  api_key,
+  stream_name,
+  topic_name,
+  enabled,
+  created_at
+) values (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10
+)
+on conflict (project_id, url, bot_email, stream_name, topic_name) do update
+set label = excluded.label,
+    api_key = excluded.api_key,
+    enabled = true
+returning id
+`
+	var storedID string
+	scanErr := store.pool.QueryRow(
+		ctx,
+		query,
+		destinationID,
+		project.OrganizationID.String(),
+		project.ProjectID.String(),
+		label.String(),
+		destinationURL.String(),
+		botEmail.String(),
+		apiKey.String(),
+		stream.String(),
+		topic.String(),
+		time.Now().UTC(),
+	).Scan(&storedID)
+	if scanErr != nil {
+		return ZulipDestinationResult{}, scanErr
+	}
+
+	return ZulipDestinationResult{
+		DestinationID: storedID,
+		ProjectID:     project.ProjectID.String(),
+		URL:           destinationURL.String(),
+		BotEmail:      botEmail.String(),
+		Stream:        stream.String(),
+		Topic:         topic.String(),
+		Label:         label.String(),
+	}, nil
+}
+
+func (store *Store) listZulipDestinations(
+	ctx context.Context,
+	scope settingsapp.Scope,
+) result.Result[[]settingsapp.ZulipDestinationView] {
+	query := `
+select id, label, url, bot_email, stream_name, topic_name, enabled
+from zulip_destinations
+where organization_id = $1
+  and project_id = $2
+order by created_at asc, label asc
+`
+	rows, queryErr := store.pool.Query(
+		ctx,
+		query,
+		scope.OrganizationID.String(),
+		scope.ProjectID.String(),
+	)
+	if queryErr != nil {
+		return result.Err[[]settingsapp.ZulipDestinationView](queryErr)
+	}
+	defer rows.Close()
+
+	destinations := []settingsapp.ZulipDestinationView{}
+	for rows.Next() {
+		var destination settingsapp.ZulipDestinationView
+		var enabled bool
+		scanErr := rows.Scan(
+			&destination.ID,
+			&destination.Label,
+			&destination.URL,
+			&destination.BotEmail,
+			&destination.Stream,
+			&destination.Topic,
+			&enabled,
+		)
+		if scanErr != nil {
+			return result.Err[[]settingsapp.ZulipDestinationView](scanErr)
+		}
+
+		destination.Status = statusFromEnabled(enabled)
+		destinations = append(destinations, destination)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return result.Err[[]settingsapp.ZulipDestinationView](rowsErr)
+	}
+
+	return result.Ok(destinations)
+}
+
 func (store *Store) listIssueOpenedAlerts(
 	ctx context.Context,
 	scope settingsapp.Scope,
@@ -1430,8 +1676,8 @@ select
   ar.name,
   ara.provider,
   ara.destination_id,
-  coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label),
-  (ar.enabled and ara.enabled and coalesce(td.enabled, wd.enabled, ed.enabled, dd.enabled, gcd.enabled, nd.enabled, md.enabled, false))
+  coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label, zd.label),
+  (ar.enabled and ara.enabled and coalesce(td.enabled, wd.enabled, ed.enabled, dd.enabled, gcd.enabled, nd.enabled, md.enabled, zd.enabled, false))
 from alert_rules ar
 join alert_rule_actions ara on ara.rule_id = ar.id
 left join telegram_destinations td on ara.provider = 'telegram' and td.id = ara.destination_id
@@ -1441,10 +1687,11 @@ left join discord_destinations dd on ara.provider = 'discord' and dd.id = ara.de
 left join google_chat_destinations gcd on ara.provider = 'google_chat' and gcd.id = ara.destination_id
 left join ntfy_destinations nd on ara.provider = 'ntfy' and nd.id = ara.destination_id
 left join teams_destinations md on ara.provider = 'microsoft_teams' and md.id = ara.destination_id
+left join zulip_destinations zd on ara.provider = 'zulip' and zd.id = ara.destination_id
 where ar.organization_id = $1
   and ar.project_id = $2
   and ar.trigger = 'issue_opened'
-order by ar.created_at asc, coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label) asc
+order by ar.created_at asc, coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label, zd.label) asc
 `
 	rows, queryErr := store.pool.Query(
 		ctx,
@@ -1500,7 +1747,7 @@ func (store *Store) listDeliveryIntents(
 select
   ni.id,
   ni.provider,
-  coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label, ni.destination_id::text),
+  coalesce(td.label, wd.label, ed.label, dd.label, gcd.label, nd.label, md.label, zd.label, ni.destination_id::text),
   ni.status,
   ni.attempts,
   ni.provider_status_code,
@@ -1518,6 +1765,7 @@ left join discord_destinations dd on ni.provider = 'discord' and dd.id = ni.dest
 left join google_chat_destinations gcd on ni.provider = 'google_chat' and gcd.id = ni.destination_id
 left join ntfy_destinations nd on ni.provider = 'ntfy' and nd.id = ni.destination_id
 left join teams_destinations md on ni.provider = 'microsoft_teams' and md.id = ni.destination_id
+left join zulip_destinations zd on ni.provider = 'zulip' and zd.id = ni.destination_id
 where ni.organization_id = $1
   and ni.project_id = $2
 order by ni.created_at desc
@@ -2202,6 +2450,83 @@ order by i.last_seen_at desc
 	return result.Ok(deliveries)
 }
 
+func (store *Store) ClaimZulipDeliveries(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) result.Result[[]notifications.ZulipDelivery] {
+	query := `
+with claimable as (
+  select ni.id
+  from notification_intents ni
+  join zulip_destinations zd on zd.id = ni.destination_id
+  where ni.provider = 'zulip'
+    and zd.enabled = true
+    and ni.status in ('pending', 'failed')
+    and ni.next_attempt_at <= $1
+    and (ni.locked_until is null or ni.locked_until < $1)
+  order by ni.created_at asc
+  limit $2
+  for update of ni skip locked
+),
+updated as (
+  update notification_intents ni
+  set status = 'delivering',
+      attempts = attempts + 1,
+      locked_until = $1::timestamptz + interval '60 seconds',
+      provider_status_code = null,
+      last_error = null
+  from claimable
+  where ni.id = claimable.id
+  returning ni.id, ni.issue_id, ni.event_id, ni.destination_id
+)
+select
+  u.id,
+  zd.url,
+  zd.bot_email,
+  zd.api_key,
+  zd.stream_name,
+  zd.topic_name,
+  e.organization_id,
+  e.project_id,
+  e.event_id,
+  e.kind,
+  e.level,
+  e.title,
+  e.platform,
+  e.occurred_at,
+  e.received_at,
+  i.id,
+  i.short_id
+from updated u
+join zulip_destinations zd on zd.id = u.destination_id
+join events e on e.id = u.event_id
+join issues i on i.id = u.issue_id
+order by i.last_seen_at desc
+`
+	rows, queryErr := store.pool.Query(ctx, query, now.UTC(), limit)
+	if queryErr != nil {
+		return result.Err[[]notifications.ZulipDelivery](queryErr)
+	}
+	defer rows.Close()
+
+	deliveries := []notifications.ZulipDelivery{}
+	for rows.Next() {
+		delivery, deliveryErr := scanZulipDelivery(rows)
+		if deliveryErr != nil {
+			return result.Err[[]notifications.ZulipDelivery](deliveryErr)
+		}
+
+		deliveries = append(deliveries, delivery)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return result.Err[[]notifications.ZulipDelivery](rowsErr)
+	}
+
+	return result.Ok(deliveries)
+}
+
 func (store *Store) MarkTelegramDelivered(
 	ctx context.Context,
 	intentID domain.NotificationIntentID,
@@ -2386,6 +2711,36 @@ func (store *Store) MarkTeamsDelivered(
 	intentID domain.NotificationIntentID,
 	now time.Time,
 	receipt notifications.TeamsSendReceipt,
+) result.Result[struct{}] {
+	query := `
+update notification_intents
+set status = 'delivered',
+    locked_until = null,
+    delivered_at = $2,
+    provider_status_code = $3,
+    provider_message_id = null,
+    last_error = null
+where id = $1
+`
+	_, execErr := store.pool.Exec(
+		ctx,
+		query,
+		intentID.String(),
+		now.UTC(),
+		receipt.Status(),
+	)
+	if execErr != nil {
+		return result.Err[struct{}](execErr)
+	}
+
+	return result.Ok(struct{}{})
+}
+
+func (store *Store) MarkZulipDelivered(
+	ctx context.Context,
+	intentID domain.NotificationIntentID,
+	now time.Time,
+	receipt notifications.ZulipSendReceipt,
 ) result.Result[struct{}] {
 	query := `
 update notification_intents
@@ -2619,6 +2974,36 @@ where id = $1
 	return result.Ok(struct{}{})
 }
 
+func (store *Store) MarkZulipFailed(
+	ctx context.Context,
+	intentID domain.NotificationIntentID,
+	now time.Time,
+	receipt notifications.ZulipSendReceipt,
+) result.Result[struct{}] {
+	query := `
+update notification_intents
+set status = 'failed',
+    locked_until = null,
+    next_attempt_at = $2 + make_interval(mins => least(60, (1 << least(greatest(attempts - 1, 0), 6)))),
+    provider_status_code = nullif($3, 0),
+    last_error = $4
+where id = $1
+`
+	_, execErr := store.pool.Exec(
+		ctx,
+		query,
+		intentID.String(),
+		now.UTC().Add(time.Minute),
+		receipt.Status(),
+		receipt.Reason(),
+	)
+	if execErr != nil {
+		return result.Err[struct{}](execErr)
+	}
+
+	return result.Ok(struct{}{})
+}
+
 type projectRefResult struct {
 	OrganizationID domain.OrganizationID
 	ProjectID      domain.ProjectID
@@ -2668,6 +3053,7 @@ left join discord_destinations dd on ara.provider = 'discord' and dd.id = ara.de
 left join google_chat_destinations gcd on ara.provider = 'google_chat' and gcd.id = ara.destination_id
 left join ntfy_destinations nd on ara.provider = 'ntfy' and nd.id = ara.destination_id
 left join teams_destinations md on ara.provider = 'microsoft_teams' and md.id = ara.destination_id
+left join zulip_destinations zd on ara.provider = 'zulip' and zd.id = ara.destination_id
 where ar.project_id = $1
   and ar.trigger = 'issue_opened'
   and ar.enabled = true
@@ -2680,6 +3066,7 @@ where ar.project_id = $1
     or (ara.provider = 'google_chat' and gcd.enabled = true)
     or (ara.provider = 'ntfy' and nd.enabled = true)
     or (ara.provider = 'microsoft_teams' and md.enabled = true)
+    or (ara.provider = 'zulip' and zd.enabled = true)
   )
 order by ara.provider asc, ara.destination_id asc
 `
@@ -2792,6 +3179,10 @@ func ensureDestinationForProject(
 
 	if provider == domain.AlertActionProviderTeams {
 		return ensureDestinationExists(ctx, tx, "teams_destinations", "microsoft teams destination is not enabled for project", projectID, destinationID)
+	}
+
+	if provider == domain.AlertActionProviderZulip {
+		return ensureDestinationExists(ctx, tx, "zulip_destinations", "zulip destination is not enabled for project", projectID, destinationID)
 	}
 
 	return errors.New("alert provider is invalid")
@@ -3315,6 +3706,69 @@ func scanTeamsDelivery(rows pgx.Rows) (notifications.TeamsDelivery, error) {
 	)
 }
 
+func scanZulipDelivery(rows pgx.Rows) (notifications.ZulipDelivery, error) {
+	var intentIDText string
+	var destinationURLText string
+	var botEmailText string
+	var apiKeyText string
+	var streamText string
+	var topicText string
+	var organizationIDText string
+	var projectIDText string
+	var eventIDText string
+	var kindText string
+	var levelText string
+	var titleText string
+	var platform string
+	var occurredAt time.Time
+	var receivedAt time.Time
+	var issueIDText string
+	var issueShortID int64
+
+	scanErr := rows.Scan(
+		&intentIDText,
+		&destinationURLText,
+		&botEmailText,
+		&apiKeyText,
+		&streamText,
+		&topicText,
+		&organizationIDText,
+		&projectIDText,
+		&eventIDText,
+		&kindText,
+		&levelText,
+		&titleText,
+		&platform,
+		&occurredAt,
+		&receivedAt,
+		&issueIDText,
+		&issueShortID,
+	)
+	if scanErr != nil {
+		return notifications.ZulipDelivery{}, scanErr
+	}
+
+	return newZulipDelivery(
+		intentIDText,
+		destinationURLText,
+		botEmailText,
+		apiKeyText,
+		streamText,
+		topicText,
+		organizationIDText,
+		projectIDText,
+		eventIDText,
+		kindText,
+		levelText,
+		titleText,
+		platform,
+		occurredAt,
+		receivedAt,
+		issueIDText,
+		issueShortID,
+	)
+}
+
 func newTelegramDelivery(
 	intentIDText string,
 	chatIDText string,
@@ -3735,6 +4189,89 @@ func newTeamsDelivery(
 	return notifications.NewTeamsDelivery(
 		intentID,
 		destinationURL,
+		event,
+		issueID,
+		issueShortID,
+	), nil
+}
+
+func newZulipDelivery(
+	intentIDText string,
+	destinationURLText string,
+	botEmailText string,
+	apiKeyText string,
+	streamText string,
+	topicText string,
+	organizationIDText string,
+	projectIDText string,
+	eventIDText string,
+	kindText string,
+	levelText string,
+	titleText string,
+	platform string,
+	occurredAt time.Time,
+	receivedAt time.Time,
+	issueIDText string,
+	issueShortID int64,
+) (notifications.ZulipDelivery, error) {
+	intentID, intentErr := domain.NewNotificationIntentID(intentIDText)
+	if intentErr != nil {
+		return notifications.ZulipDelivery{}, intentErr
+	}
+
+	destinationResult := outbound.ParseDestinationURL(destinationURLText)
+	destinationURL, destinationErr := destinationResult.Value()
+	if destinationErr != nil {
+		return notifications.ZulipDelivery{}, destinationErr
+	}
+
+	botEmail, botEmailErr := domain.NewZulipBotEmail(botEmailText)
+	if botEmailErr != nil {
+		return notifications.ZulipDelivery{}, botEmailErr
+	}
+
+	apiKey, apiKeyErr := domain.NewZulipAPIKey(apiKeyText)
+	if apiKeyErr != nil {
+		return notifications.ZulipDelivery{}, apiKeyErr
+	}
+
+	stream, streamErr := domain.NewZulipStreamName(streamText)
+	if streamErr != nil {
+		return notifications.ZulipDelivery{}, streamErr
+	}
+
+	topic, topicErr := domain.NewZulipTopicName(topicText)
+	if topicErr != nil {
+		return notifications.ZulipDelivery{}, topicErr
+	}
+
+	event, eventErr := newNotificationEvent(
+		organizationIDText,
+		projectIDText,
+		eventIDText,
+		kindText,
+		levelText,
+		titleText,
+		platform,
+		occurredAt,
+		receivedAt,
+	)
+	if eventErr != nil {
+		return notifications.ZulipDelivery{}, eventErr
+	}
+
+	issueID, issueErr := domain.NewIssueID(issueIDText)
+	if issueErr != nil {
+		return notifications.ZulipDelivery{}, issueErr
+	}
+
+	return notifications.NewZulipDelivery(
+		intentID,
+		destinationURL,
+		botEmail,
+		apiKey,
+		stream,
+		topic,
 		event,
 		issueID,
 		issueShortID,

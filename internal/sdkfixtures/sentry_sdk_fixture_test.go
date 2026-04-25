@@ -51,8 +51,8 @@ func TestSentrySDKFixtureReplay(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 25 {
-		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 26 {
+		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	handler := httpadapter.NewHandler(
@@ -69,6 +69,7 @@ func TestSentrySDKFixtureReplay(t *testing.T) {
 		store,
 		nil,
 		store,
+		httpadapter.IngestEnrichments{},
 		httpadapter.AuthSettings{PublicURL: "http://example.test", SecretKey: "sdk-fixture-secret"},
 	)
 	server := httptest.NewServer(logIngestRequests(t, handler))

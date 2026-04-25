@@ -43,6 +43,26 @@ type TeamsDestinationLabel struct {
 	value string
 }
 
+type ZulipDestinationLabel struct {
+	value string
+}
+
+type ZulipBotEmail struct {
+	value string
+}
+
+type ZulipAPIKey struct {
+	value string
+}
+
+type ZulipStreamName struct {
+	value string
+}
+
+type ZulipTopicName struct {
+	value string
+}
+
 type NtfyTopic struct {
 	value string
 }
@@ -217,6 +237,100 @@ func NewTeamsDestinationLabel(input string) (TeamsDestinationLabel, error) {
 	return TeamsDestinationLabel{value: value}, nil
 }
 
+func NewZulipDestinationLabel(input string) (ZulipDestinationLabel, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ZulipDestinationLabel{}, errors.New("zulip label is required")
+	}
+
+	if strings.ContainsAny(value, "\r\n\t") {
+		return ZulipDestinationLabel{}, errors.New("zulip label cannot contain control whitespace")
+	}
+
+	if utf8.RuneCountInString(value) > 80 {
+		return ZulipDestinationLabel{}, errors.New("zulip label is too long")
+	}
+
+	return ZulipDestinationLabel{value: value}, nil
+}
+
+func NewZulipBotEmail(input string) (ZulipBotEmail, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ZulipBotEmail{}, errors.New("zulip bot email is required")
+	}
+
+	if strings.ContainsAny(value, "\r\n\t ") {
+		return ZulipBotEmail{}, errors.New("zulip bot email cannot contain whitespace")
+	}
+
+	parsed, parseErr := mail.ParseAddress(value)
+	if parseErr != nil {
+		return ZulipBotEmail{}, errors.New("zulip bot email is invalid")
+	}
+
+	if parsed.Address != value {
+		return ZulipBotEmail{}, errors.New("zulip bot email must not include a display name")
+	}
+
+	if utf8.RuneCountInString(value) > 254 {
+		return ZulipBotEmail{}, errors.New("zulip bot email is too long")
+	}
+
+	return ZulipBotEmail{value: value}, nil
+}
+
+func NewZulipAPIKey(input string) (ZulipAPIKey, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ZulipAPIKey{}, errors.New("zulip api key is required")
+	}
+
+	if strings.ContainsAny(value, "\r\n\t ") {
+		return ZulipAPIKey{}, errors.New("zulip api key cannot contain whitespace")
+	}
+
+	if utf8.RuneCountInString(value) > 256 {
+		return ZulipAPIKey{}, errors.New("zulip api key is too long")
+	}
+
+	return ZulipAPIKey{value: value}, nil
+}
+
+func NewZulipStreamName(input string) (ZulipStreamName, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ZulipStreamName{}, errors.New("zulip stream is required")
+	}
+
+	if strings.ContainsAny(value, "\r\n\t") {
+		return ZulipStreamName{}, errors.New("zulip stream cannot contain control whitespace")
+	}
+
+	if utf8.RuneCountInString(value) > 128 {
+		return ZulipStreamName{}, errors.New("zulip stream is too long")
+	}
+
+	return ZulipStreamName{value: value}, nil
+}
+
+func NewZulipTopicName(input string) (ZulipTopicName, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return ZulipTopicName{}, errors.New("zulip topic is required")
+	}
+
+	if strings.ContainsAny(value, "\r\n\t") {
+		return ZulipTopicName{}, errors.New("zulip topic cannot contain control whitespace")
+	}
+
+	if utf8.RuneCountInString(value) > 128 {
+		return ZulipTopicName{}, errors.New("zulip topic is too long")
+	}
+
+	return ZulipTopicName{value: value}, nil
+}
+
 func NewNtfyTopic(input string) (NtfyTopic, error) {
 	value := strings.TrimSpace(input)
 	if value == "" {
@@ -298,6 +412,26 @@ func (label NtfyDestinationLabel) String() string {
 
 func (label TeamsDestinationLabel) String() string {
 	return label.value
+}
+
+func (label ZulipDestinationLabel) String() string {
+	return label.value
+}
+
+func (email ZulipBotEmail) String() string {
+	return email.value
+}
+
+func (key ZulipAPIKey) String() string {
+	return key.value
+}
+
+func (stream ZulipStreamName) String() string {
+	return stream.value
+}
+
+func (topic ZulipTopicName) String() string {
+	return topic.value
 }
 
 func (topic NtfyTopic) String() string {

@@ -459,6 +459,71 @@ func createTeamsDestinationHandler(
 	}
 }
 
+func createZulipDestinationHandler(
+	manager settingsapp.Manager,
+	resolver outbound.Resolver,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddZulipDestination(
+			r.Context(),
+			resolver,
+			manager,
+			settingsapp.AddZulipDestinationCommand{
+				Scope:    settingsScopeFromSession(session),
+				URL:      r.PostFormValue("url"),
+				BotEmail: r.PostFormValue("bot_email"),
+				APIKey:   r.PostFormValue("api_key"),
+				Stream:   r.PostFormValue("stream"),
+				Topic:    r.PostFormValue("topic"),
+				Label:    r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=zulip-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "Zulip destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
 func createIssueOpenedAlertHandler(
 	manager settingsapp.Manager,
 	access operators.Access,
@@ -668,6 +733,13 @@ func settingsMessageFromNotice(notice string) templates.NotificationSettingsMess
 	if notice == "teams-destination" {
 		return templates.NotificationSettingsMessage{
 			Text: "Microsoft Teams destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "zulip-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "Zulip destination saved",
 			Kind: "success",
 		}
 	}

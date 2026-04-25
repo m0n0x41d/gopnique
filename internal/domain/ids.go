@@ -56,6 +56,10 @@ type TeamsDestinationID struct {
 	value string
 }
 
+type ZulipDestinationID struct {
+	value string
+}
+
 type AlertRuleID struct {
 	value string
 }
@@ -180,6 +184,15 @@ func NewTeamsDestinationID(input string) (TeamsDestinationID, error) {
 	return TeamsDestinationID{value: value}, nil
 }
 
+func NewZulipDestinationID(input string) (ZulipDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return ZulipDestinationID{}, err
+	}
+
+	return ZulipDestinationID{value: value}, nil
+}
+
 func NewAlertRuleID(input string) (AlertRuleID, error) {
 	value, err := normalizeUUID(input)
 	if err != nil {
@@ -261,6 +274,10 @@ func (id NtfyDestinationID) String() string {
 }
 
 func (id TeamsDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id ZulipDestinationID) String() string {
 	return dashedUUID(id.value)
 }
 

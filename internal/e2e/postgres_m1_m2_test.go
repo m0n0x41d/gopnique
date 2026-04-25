@@ -30,6 +30,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/teams"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/telegram"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/webhook"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/zulip"
 	"github.com/ivanzakutnii/error-tracker/internal/app/notifications"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
 )
@@ -52,8 +53,8 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 25 {
-		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 26 {
+		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	publicURL := "http://example.test"
@@ -72,6 +73,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 		store,
 		resolver,
 		store,
+		httpadapter.IngestEnrichments{},
 		httpadapter.AuthSettings{PublicURL: publicURL, SecretKey: "e2e-secret"},
 	))
 	defer server.Close()
@@ -154,6 +156,9 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	teamsServer, teamsURL := newTeamsFixtureServer(t)
 	defer teamsServer.Close()
 	teamsDestinationID := createTeamsDestinationThroughUI(t, ctx, databaseURL, client, server.URL, teamsURL)
+	zulipServer, zulipURL := newZulipFixtureServer(t)
+	defer zulipServer.Close()
+	zulipDestinationID := createZulipDestinationThroughUI(t, ctx, databaseURL, client, server.URL, zulipURL)
 	noAlertReceipt := postNoAlertStoreEvent(t, client, server.URL, publicKey)
 	if !strings.Contains(noAlertReceipt.Body, `"id":"970e8400e29b41d4a716446655440000"`) {
 		t.Fatalf("unexpected no-alert receipt: %s", noAlertReceipt.Body)
@@ -166,6 +171,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	createIssueOpenedGoogleChatAlertThroughUI(t, client, server.URL, googleChatDestinationID)
 	createIssueOpenedNtfyAlertThroughUI(t, client, server.URL, ntfyDestinationID)
 	createIssueOpenedTeamsAlertThroughUI(t, client, server.URL, teamsDestinationID)
+	createIssueOpenedZulipAlertThroughUI(t, client, server.URL, zulipDestinationID)
 	webhookRuleID := firstAlertIDByName(t, ctx, databaseURL, "Issue opened to Webhook")
 	setIssueOpenedAlertThroughUI(t, client, server.URL, webhookRuleID, "disable")
 	setIssueOpenedAlertThroughUI(t, client, server.URL, webhookRuleID, "enable")
@@ -291,6 +297,8 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	assertNtfyDelivered(t, ctx, databaseURL)
 	deliverTeams(t, ctx, store, resolver, teamsURL)
 	assertTeamsDelivered(t, ctx, databaseURL)
+	deliverZulip(t, ctx, store, resolver, zulipURL)
+	assertZulipDelivered(t, ctx, databaseURL)
 	assertDeliveryJournal(t, client, server.URL)
 	setOperatorRoles(t, ctx, databaseURL, "operator@example.test", "member", "member")
 	assertProjectMemberRoleGate(t, client, server.URL, issueID)
@@ -1417,6 +1425,73 @@ func createIssueOpenedTeamsAlertThroughUI(
 	}
 }
 
+func createZulipDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+	zulipURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-zulip")
+	form.Set("url", zulipURL)
+	form.Set("bot_email", "bot@example.test")
+	form.Set("api_key", "zulip-key")
+	form.Set("stream", "ops")
+	form.Set("topic", "alerts")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/zulip-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected zulip destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-zulip") {
+		t.Fatalf("expected zulip destination in fragment: %s", response.Body)
+	}
+
+	return firstZulipDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedZulipAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "zulip:"+destinationID)
+	form.Set("name", "Issue opened to Zulip")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected zulip alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to Zulip") {
+		t.Fatalf("expected zulip alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-zulip") {
+		t.Fatalf("expected zulip destination in fragment: %s", response.Body)
+	}
+}
+
 func setIssueOpenedAlertThroughUI(
 	t *testing.T,
 	client *http.Client,
@@ -1609,6 +1684,27 @@ func firstTeamsDestinationID(t *testing.T, ctx context.Context, databaseURL stri
 	).Scan(&destinationID)
 	if scanErr != nil {
 		t.Fatalf("microsoft teams destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstZulipDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from zulip_destinations where label = 'ops-zulip'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("zulip destination id: %v", scanErr)
 	}
 
 	return destinationID
@@ -2235,6 +2331,34 @@ func deliverTeams(
 	}
 }
 
+func deliverZulip(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	resolver e2eResolver,
+	zulipURL string,
+) {
+	t.Helper()
+
+	client := &http.Client{Transport: rewriteHookTransport(t, zulipURL)}
+	sender := zulip.NewSender(client)
+	commandResult := notifications.NewZulipBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("zulip command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverZulipBatch(ctx, command, resolver, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("zulip batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected zulip receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+}
+
 type e2eEmailSender struct {
 	body string
 }
@@ -2451,6 +2575,35 @@ where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
 	}
 }
 
+func assertZulipDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerStatusCode int
+	var attempts int
+	query := `
+select ni.status, ni.provider_status_code, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'zulip'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerStatusCode, &attempts)
+	if scanErr != nil {
+		t.Fatalf("zulip intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerStatusCode != http.StatusOK || attempts != 1 {
+		t.Fatalf("unexpected zulip intent: %s %d %d", status, providerStatusCode, attempts)
+	}
+}
+
 func assertDeliveryJournal(t *testing.T, client *http.Client, baseURL string) {
 	t.Helper()
 
@@ -2459,7 +2612,7 @@ func assertDeliveryJournal(t *testing.T, client *http.Client, baseURL string) {
 		t.Fatalf("expected notification settings ok, got %d", settings.StatusCode)
 	}
 
-	for _, expected := range []string{"Delivery journal", "telegram", "webhook", "email", "discord", "google_chat", "ntfy", "microsoft_teams", "delivered", "204"} {
+	for _, expected := range []string{"Delivery journal", "telegram", "webhook", "email", "discord", "google_chat", "ntfy", "microsoft_teams", "zulip", "delivered", "204"} {
 		if !strings.Contains(settings.Body, expected) {
 			t.Fatalf("expected delivery journal to contain %q: %s", expected, settings.Body)
 		}
@@ -2867,6 +3020,46 @@ func newTeamsFixtureServer(t *testing.T) (*httptest.Server, string) {
 	}
 
 	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port() + "/teams"
+}
+
+func newZulipFixtureServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/messages" {
+			t.Fatalf("unexpected zulip path: %s", r.URL.Path)
+		}
+
+		user, password, authOK := r.BasicAuth()
+		if !authOK || user != "bot@example.test" || password != "zulip-key" {
+			t.Fatalf("unexpected zulip auth: ok=%t user=%q password=%q", authOK, user, password)
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			t.Fatalf("parse zulip form: %v", parseErr)
+		}
+
+		if r.PostForm.Get("type") != "stream" ||
+			r.PostForm.Get("to") != "ops" ||
+			r.PostForm.Get("topic") != "alerts" {
+			t.Fatalf("unexpected zulip form: %#v", r.PostForm)
+		}
+
+		content := r.PostForm.Get("content")
+		if !strings.Contains(content, "New issue") || !strings.Contains(content, "Event:") {
+			t.Fatalf("unexpected zulip content: %s", content)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("parse zulip server url: %v", parseErr)
+	}
+
+	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port()
 }
 
 type e2eResolver map[string][]netip.Addr

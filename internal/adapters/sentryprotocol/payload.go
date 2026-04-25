@@ -58,6 +58,7 @@ type rawFrame struct {
 	Function string `json:"function"`
 	InApp    *bool  `json:"in_app"`
 	Lineno   int    `json:"lineno"`
+	Colno    int    `json:"colno"`
 }
 
 func ParseStoreEvent(
@@ -120,6 +121,7 @@ func parseEventPayload(
 		Tags:                 eventTags(project, raw),
 		DefaultGroupingParts: defaultGroupingParts(kind, raw, title),
 		ExplicitFingerprint:  normalizeFingerprint(raw.Fingerprint),
+		JsStacktrace:         jsStacktraceFrames(kind, raw),
 	})
 	if canonicalErr != nil {
 		return result.Err[domain.CanonicalEvent](canonicalErr)
@@ -652,4 +654,65 @@ func normalizeFingerprint(values []any) []string {
 	}
 
 	return result
+}
+
+func jsStacktraceFrames(kind domain.EventKind, payload rawEventPayload) []domain.JsStacktraceFrame {
+	if kind != domain.EventKindError {
+		return nil
+	}
+
+	if !isJsPlatform(payload.Platform) {
+		return nil
+	}
+
+	exception := exceptionValues(payload.Exception)
+	frames := []domain.JsStacktraceFrame{}
+
+	for _, value := range exception.Values {
+		for _, raw := range value.Stacktrace.Frames {
+			built, ok := buildJsStacktraceFrame(raw)
+			if !ok {
+				continue
+			}
+
+			frames = append(frames, built)
+		}
+	}
+
+	return frames
+}
+
+func buildJsStacktraceFrame(frame rawFrame) (domain.JsStacktraceFrame, bool) {
+	absPath := strings.TrimSpace(frame.AbsPath)
+	if absPath == "" {
+		absPath = strings.TrimSpace(frame.Filename)
+	}
+
+	if absPath == "" {
+		return domain.JsStacktraceFrame{}, false
+	}
+
+	if frame.Lineno < 1 {
+		return domain.JsStacktraceFrame{}, false
+	}
+
+	column := max(frame.Colno, 0)
+
+	built, builtErr := domain.NewUnresolvedJsStacktraceFrame(
+		absPath,
+		strings.TrimSpace(frame.Function),
+		frame.Lineno,
+		column,
+	)
+	if builtErr != nil {
+		return domain.JsStacktraceFrame{}, false
+	}
+
+	return built, true
+}
+
+func isJsPlatform(platform string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(platform))
+
+	return normalized == "javascript" || normalized == "node"
 }

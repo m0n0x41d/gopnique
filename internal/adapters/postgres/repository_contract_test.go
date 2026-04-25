@@ -44,8 +44,8 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 25 {
-		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 26 {
+		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{
@@ -300,6 +300,25 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("microsoft teams destination: %v", teamsErr)
 	}
 
+	zulipResult := settingsapp.AddZulipDestination(
+		ctx,
+		repositoryResolver{"zulip.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
+		store,
+		settingsapp.AddZulipDestinationCommand{
+			Scope:    scope,
+			URL:      "https://zulip.example.com",
+			BotEmail: "bot@example.test",
+			APIKey:   "zulip-key",
+			Stream:   "ops",
+			Topic:    "alerts",
+			Label:    "ops-zulip",
+		},
+	)
+	zulipDestination, zulipErr := zulipResult.Value()
+	if zulipErr != nil {
+		t.Fatalf("zulip destination: %v", zulipErr)
+	}
+
 	alertResult := settingsapp.AddIssueOpenedTelegramAlert(
 		ctx,
 		store,
@@ -404,6 +423,21 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("issue-opened microsoft teams alert: %v", teamsAlertErr)
 	}
 
+	zulipAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderZulip,
+			DestinationID: zulipDestination.DestinationID,
+			Name:          "Issue opened to Zulip",
+		},
+	)
+	_, zulipAlertErr := zulipAlertResult.Value()
+	if zulipAlertErr != nil {
+		t.Fatalf("issue-opened zulip alert: %v", zulipAlertErr)
+	}
+
 	settingsResult := settingsapp.ShowProjectSettings(ctx, store, settingsapp.ProjectSettingsQuery{Scope: scope})
 	settings, settingsErr := settingsResult.Value()
 	if settingsErr != nil {
@@ -416,7 +450,8 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		len(settings.GoogleChatDestinations) != 1 ||
 		len(settings.NtfyDestinations) != 1 ||
 		len(settings.TeamsDestinations) != 1 ||
-		len(settings.IssueOpenedAlerts) != 7 {
+		len(settings.ZulipDestinations) != 1 ||
+		len(settings.IssueOpenedAlerts) != 8 {
 		t.Fatalf("unexpected settings view: %#v", settings)
 	}
 
@@ -861,6 +896,20 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("expected microsoft teams lease to hide claimed delivery, got %d", len(secondTeamsClaim))
 	}
 
+	zulipDeliveries := claimZulipConcurrently(t, ctx, store)
+	if len(zulipDeliveries) != 1 {
+		t.Fatalf("expected one zulip delivery, got %d", len(zulipDeliveries))
+	}
+
+	secondZulipClaimResult := store.ClaimZulipDeliveries(ctx, time.Now().UTC(), 10)
+	secondZulipClaim, secondZulipClaimErr := secondZulipClaimResult.Value()
+	if secondZulipClaimErr != nil {
+		t.Fatalf("second zulip claim: %v", secondZulipClaimErr)
+	}
+	if len(secondZulipClaim) != 0 {
+		t.Fatalf("expected zulip lease to hide claimed delivery, got %d", len(secondZulipClaim))
+	}
+
 	markResult := store.MarkTelegramDelivered(
 		ctx,
 		deliveries[0].IntentID(),
@@ -938,6 +987,17 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("mark microsoft teams delivered: %v", markTeamsErr)
 	}
 
+	markZulipResult := store.MarkZulipDelivered(
+		ctx,
+		zulipDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewZulipDeliveredReceipt(200),
+	)
+	_, markZulipErr := markZulipResult.Value()
+	if markZulipErr != nil {
+		t.Fatalf("mark zulip delivered: %v", markZulipErr)
+	}
+
 	assertRepositoryDeliveredIntent(t, ctx, store, "provider-1")
 	assertRepositoryWebhookDeliveredIntent(t, ctx, store, 204)
 	assertRepositoryEmailDeliveredIntent(t, ctx, store, "<repo-email@example.test>")
@@ -945,6 +1005,7 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	assertRepositoryGoogleChatDeliveredIntent(t, ctx, store, 200)
 	assertRepositoryNtfyDeliveredIntent(t, ctx, store, 200)
 	assertRepositoryTeamsDeliveredIntent(t, ctx, store, 200)
+	assertRepositoryZulipDeliveredIntent(t, ctx, store, 200)
 	assertRepositoryEventIDConstraint(t, ctx, store, auth.ProjectID(), event.EventID())
 }
 
@@ -962,8 +1023,8 @@ func TestPostgresIssueShortIDConcurrency(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 25 {
-		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 26 {
+		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{
@@ -1318,6 +1379,52 @@ func collectTeamsClaims(
 		select {
 		case err := <-errors:
 			t.Fatalf("claim microsoft teams deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimZulipConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.ZulipDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.ZulipDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimZulipDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectZulipClaims(t, results, errors)
+}
+
+func collectZulipClaims(
+	t *testing.T,
+	results <-chan []notifications.ZulipDelivery,
+	errors <-chan error,
+) []notifications.ZulipDelivery {
+	t.Helper()
+
+	deliveries := []notifications.ZulipDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim zulip deliveries: %v", err)
 		case claimed := <-results:
 			deliveries = append(deliveries, claimed...)
 		}
@@ -1769,6 +1876,36 @@ where provider = 'microsoft_teams'
 
 	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
 		t.Fatalf("unexpected microsoft teams intent: %s %d %d", status, storedStatusCode, attempts)
+	}
+}
+
+func assertRepositoryZulipDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	statusCode int,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_status_code, attempts
+from notification_intents
+where provider = 'zulip'
+`
+	var status string
+	var storedStatusCode int
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedStatusCode,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("zulip delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
+		t.Fatalf("unexpected zulip intent: %s %d %d", status, storedStatusCode, attempts)
 	}
 }
 

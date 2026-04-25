@@ -18,6 +18,7 @@ const (
 	AlertActionProviderGoogleChat AlertActionProvider = "google_chat"
 	AlertActionProviderNtfy       AlertActionProvider = "ntfy"
 	AlertActionProviderTeams      AlertActionProvider = "microsoft_teams"
+	AlertActionProviderZulip      AlertActionProvider = "zulip"
 )
 
 type AlertRuleName struct {
@@ -44,7 +45,8 @@ func (provider AlertActionProvider) Valid() bool {
 		provider == AlertActionProviderDiscord ||
 		provider == AlertActionProviderGoogleChat ||
 		provider == AlertActionProviderNtfy ||
-		provider == AlertActionProviderTeams
+		provider == AlertActionProviderTeams ||
+		provider == AlertActionProviderZulip
 }
 
 func (trigger AlertTrigger) String() string {

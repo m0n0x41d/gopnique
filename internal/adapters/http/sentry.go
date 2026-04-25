@@ -17,6 +17,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/sentryprotocol"
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
 	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
+	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
@@ -53,15 +54,15 @@ type parsedSentryEvent struct {
 	userReports []sentryprotocol.UserReportItem
 }
 
-func sentryStoreHandler(backend SentryIngestBackend) http.HandlerFunc {
+func sentryStoreHandler(backend SentryIngestBackend, sourceMapResolver *sourcemaps.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		handleSentryIngestCarrier(w, r, backend, sentryStoreRequest)
+		handleSentryIngestCarrier(w, r, backend, sourceMapResolver, sentryStoreRequest)
 	}
 }
 
-func sentryEnvelopeHandler(backend SentryIngestBackend) http.HandlerFunc {
+func sentryEnvelopeHandler(backend SentryIngestBackend, sourceMapResolver *sourcemaps.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		handleSentryIngestCarrier(w, r, backend, sentryEnvelopeRequest)
+		handleSentryIngestCarrier(w, r, backend, sourceMapResolver, sentryEnvelopeRequest)
 	}
 }
 
@@ -81,6 +82,7 @@ func handleSentryIngestCarrier(
 	w http.ResponseWriter,
 	r *http.Request,
 	backend SentryIngestBackend,
+	sourceMapResolver *sourcemaps.Service,
 	kind sentryRequestKind,
 ) {
 	if backend == nil {
@@ -125,6 +127,10 @@ func handleSentryIngestCarrier(
 	if parseErr != nil {
 		writeProtocolError(w, parseErr)
 		return
+	}
+
+	if parsed.hasEvent {
+		parsed.event = sourcemaps.ApplyToCanonicalEvent(r.Context(), sourceMapResolver, parsed.event)
 	}
 
 	reportCommandsResult := prepareParsedUserReports(auth, parsed.userReports)

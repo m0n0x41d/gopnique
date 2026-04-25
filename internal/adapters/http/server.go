@@ -15,6 +15,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/app/outbound"
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
+	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
 	statsapp "github.com/ivanzakutnii/error-tracker/internal/app/stats"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
@@ -28,6 +29,10 @@ type Server struct {
 type AuthSettings struct {
 	PublicURL string
 	SecretKey string
+}
+
+type IngestEnrichments struct {
+	SourceMapResolver *sourcemaps.Service
 }
 
 func New(
@@ -45,11 +50,12 @@ func New(
 	auditReader auditapp.Reader,
 	resolver outbound.Resolver,
 	operatorAccess operators.Access,
+	enrichments IngestEnrichments,
 	auth AuthSettings,
 ) *Server {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, auth),
+		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -70,9 +76,10 @@ func NewHandler(
 	auditReader auditapp.Reader,
 	resolver outbound.Resolver,
 	operatorAccess operators.Access,
+	enrichments IngestEnrichments,
 	auth AuthSettings,
 ) http.Handler {
-	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, NewSessionCodec(auth.SecretKey), auth)
+	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, NewSessionCodec(auth.SecretKey), auth)
 }
 
 func newMux(
@@ -89,13 +96,14 @@ func newMux(
 	auditReader auditapp.Reader,
 	resolver outbound.Resolver,
 	operatorAccess operators.Access,
+	enrichments IngestEnrichments,
 	sessions SessionCodec,
 	auth AuthSettings,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend))
-	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend))
+	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend, enrichments.SourceMapResolver))
+	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend, enrichments.SourceMapResolver))
 	mux.HandleFunc("POST /api/{project_ref}/security/", sentrySecurityHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/csp-report/", sentrySecurityHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/user-feedback/", sentryUserFeedbackHandler(ingestBackend))
@@ -128,6 +136,7 @@ func newMux(
 	mux.HandleFunc("POST /settings/notifications/google-chat-destinations", createGoogleChatDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/ntfy-destinations", createNtfyDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/teams-destinations", createTeamsDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/zulip-destinations", createZulipDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts", createIssueOpenedAlertHandler(settingsManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts/{rule_id}/enable", setIssueOpenedAlertStatusHandler(settingsManager, operatorAccess, sessions, true))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts/{rule_id}/disable", setIssueOpenedAlertStatusHandler(settingsManager, operatorAccess, sessions, false))

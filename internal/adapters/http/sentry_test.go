@@ -26,7 +26,7 @@ func TestSentryStoreRouteIngestsAfterAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -47,7 +47,7 @@ func TestSentryEnvelopeRouteDeniesMissingAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -64,7 +64,7 @@ func TestSentrySecurityRouteIngestsCSPReport(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -85,7 +85,7 @@ func TestSentrySecurityRouteRejectsUnsupportedCSPReport(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -103,7 +103,7 @@ func TestSentryStoreRouteMapsQuotaTo429(t *testing.T) {
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
 	backend.quota = ingest.NewQuotaRejected("project_quota_exceeded")
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -129,7 +129,7 @@ func TestSentryStoreRouteMapsRateLimitTo429(t *testing.T) {
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
 	backend.rateLimit = ratelimitapp.NewRejected("project_key_rate_limited", 15*time.Second)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
