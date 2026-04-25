@@ -27,12 +27,18 @@ type IssueOpenedEnqueueResult struct {
 	count int
 }
 
+type QuotaDecision struct {
+	allowed bool
+	reason  string
+}
+
 type ReceiptKind string
 
 const (
 	ReceiptAcceptedIssueEvent    ReceiptKind = "accepted_issue_event"
 	ReceiptAcceptedNonIssueEvent ReceiptKind = "accepted_non_issue_event"
 	ReceiptDuplicateEvent        ReceiptKind = "duplicate_event"
+	ReceiptQuotaRejected         ReceiptKind = "quota_rejected"
 )
 
 type IngestReceipt struct {
@@ -41,6 +47,7 @@ type IngestReceipt struct {
 	fingerprint domain.Fingerprint
 	issueID     domain.IssueID
 	hasIssueID  bool
+	reason      string
 }
 
 type IngestTransactionResult struct {
@@ -65,6 +72,18 @@ func NewIssueChange(issueID domain.IssueID, created bool) IssueChange {
 
 func NewIssueOpenedEnqueueResult(count int) IssueOpenedEnqueueResult {
 	return IssueOpenedEnqueueResult{count: count}
+}
+
+func NewQuotaAllowed() QuotaDecision {
+	return QuotaDecision{allowed: true}
+}
+
+func NewQuotaRejected(reason string) QuotaDecision {
+	if reason == "" {
+		reason = "quota_exceeded"
+	}
+
+	return QuotaDecision{reason: reason}
 }
 
 func IngestCanonicalEvent(
@@ -105,6 +124,16 @@ func ingestProgram(accepted ingestplan.AcceptedEvent) IngestProgram {
 
 		if exists {
 			return result.Ok(transactionResult(duplicateReceipt(accepted)))
+		}
+
+		quotaResult := ports.CheckQuota(ctx, event)
+		quota, quotaErr := quotaResult.Value()
+		if quotaErr != nil {
+			return result.Err[IngestTransactionResult](quotaErr)
+		}
+
+		if !quota.Allowed() {
+			return result.Ok(transactionResult(quotaReceipt(accepted, quota)))
 		}
 
 		appendResult := ports.Append(ctx, accepted)
@@ -161,6 +190,15 @@ func duplicateReceipt(accepted ingestplan.AcceptedEvent) IngestReceipt {
 	}
 }
 
+func quotaReceipt(accepted ingestplan.AcceptedEvent, quota QuotaDecision) IngestReceipt {
+	return IngestReceipt{
+		kind:        ReceiptQuotaRejected,
+		eventID:     accepted.Event().EventID(),
+		fingerprint: accepted.Fingerprint(),
+		reason:      quota.Reason(),
+	}
+}
+
 func nonIssueReceipt(accepted ingestplan.AcceptedEvent) IngestReceipt {
 	return IngestReceipt{
 		kind:        ReceiptAcceptedNonIssueEvent,
@@ -199,6 +237,14 @@ func (enqueue IssueOpenedEnqueueResult) Count() int {
 	return enqueue.count
 }
 
+func (decision QuotaDecision) Allowed() bool {
+	return decision.allowed
+}
+
+func (decision QuotaDecision) Reason() string {
+	return decision.reason
+}
+
 func (receipt IngestReceipt) Kind() ReceiptKind {
 	return receipt.kind
 }
@@ -213,4 +259,8 @@ func (receipt IngestReceipt) Fingerprint() domain.Fingerprint {
 
 func (receipt IngestReceipt) IssueID() (domain.IssueID, bool) {
 	return receipt.issueID, receipt.hasIssueID
+}
+
+func (receipt IngestReceipt) Reason() string {
+	return receipt.reason
 }

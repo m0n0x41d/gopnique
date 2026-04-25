@@ -15,6 +15,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/app/outbound"
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
+	statsapp "github.com/ivanzakutnii/error-tracker/internal/app/stats"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/web/templates"
@@ -36,6 +37,7 @@ func New(
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
+	statsReader statsapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -47,7 +49,7 @@ func New(
 ) *Server {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, auth),
+		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -60,6 +62,7 @@ func NewHandler(
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
+	statsReader statsapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -69,7 +72,7 @@ func NewHandler(
 	operatorAccess operators.Access,
 	auth AuthSettings,
 ) http.Handler {
-	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, NewSessionCodec(auth.SecretKey), auth)
+	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, NewSessionCodec(auth.SecretKey), auth)
 }
 
 func newMux(
@@ -78,6 +81,7 @@ func newMux(
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
+	statsReader statsapp.Reader,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -92,6 +96,8 @@ func newMux(
 
 	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend))
+	mux.HandleFunc("POST /api/{project_ref}/security/", sentrySecurityHandler(ingestBackend))
+	mux.HandleFunc("POST /api/{project_ref}/csp-report/", sentrySecurityHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/user-feedback/", sentryUserFeedbackHandler(ingestBackend))
 	mux.HandleFunc("GET /api/v1/project", currentProjectAPIHandler(projectReader, tokenManager, auth))
 	mux.HandleFunc("GET /setup", setupGetHandler(operatorAccess, sessions))
@@ -99,6 +105,7 @@ func newMux(
 	mux.HandleFunc("GET /login", loginGetHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /login", loginPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /logout", logoutPostHandler(operatorAccess, sessions))
+	mux.HandleFunc("GET /stats", projectStatsHandler(statsReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /issues", issueListHandler(issueManager, operatorAccess, sessions))
 	mux.HandleFunc("GET /issues/{issue_id}", issueDetailHandler(issueManager, userReportReader, operatorAccess, sessions))
 	mux.HandleFunc("POST /issues/{issue_id}/status", issueStatusHandler(issueManager, operatorAccess, sessions))
@@ -116,6 +123,11 @@ func newMux(
 	mux.HandleFunc("GET /settings/notifications", notificationSettingsHandler(settingsManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/telegram-destinations", createTelegramDestinationHandler(settingsManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/webhook-destinations", createWebhookDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/email-destinations", createEmailDestinationHandler(settingsManager, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/discord-destinations", createDiscordDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/google-chat-destinations", createGoogleChatDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/ntfy-destinations", createNtfyDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /settings/notifications/teams-destinations", createTeamsDestinationHandler(settingsManager, resolver, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts", createIssueOpenedAlertHandler(settingsManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts/{rule_id}/enable", setIssueOpenedAlertStatusHandler(settingsManager, operatorAccess, sessions, true))
 	mux.HandleFunc("POST /settings/notifications/issue-opened-alerts/{rule_id}/disable", setIssueOpenedAlertStatusHandler(settingsManager, operatorAccess, sessions, false))

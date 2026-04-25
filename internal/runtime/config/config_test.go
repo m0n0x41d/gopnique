@@ -22,6 +22,14 @@ func TestLoadAcceptsServerConfig(t *testing.T) {
 	if cfg.NotificationBatchSize != 10 {
 		t.Fatalf("unexpected notification batch size: %d", cfg.NotificationBatchSize)
 	}
+
+	if cfg.RetentionBatchSize != 500 {
+		t.Fatalf("unexpected retention batch size: %d", cfg.RetentionBatchSize)
+	}
+
+	if !cfg.SMTPEnabled() || cfg.SMTPAddr != "127.0.0.1:2525" || cfg.SMTPFrom != "alerts@example.test" {
+		t.Fatalf("unexpected smtp config: %#v", cfg)
+	}
 }
 
 func TestLoadRequiresOnlyDatabaseForMigrate(t *testing.T) {
@@ -137,6 +145,48 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			env:     replace(validEnv(), "NOTIFICATION_BATCH_SIZE=0"),
 			message: "NOTIFICATION_BATCH_SIZE must be positive",
 		},
+		{
+			name:    "invalid retention batch size integer",
+			mode:    ModeWorker,
+			env:     replace(validEnv(), "RETENTION_BATCH_SIZE=many"),
+			message: "RETENTION_BATCH_SIZE must be an integer",
+		},
+		{
+			name:    "nonpositive retention batch size",
+			mode:    ModeWorker,
+			env:     replace(validEnv(), "RETENTION_BATCH_SIZE=0"),
+			message: "RETENTION_BATCH_SIZE must be positive",
+		},
+		{
+			name:    "missing smtp addr",
+			mode:    ModeWorker,
+			env:     without(validEnv(), "SMTP_ADDR"),
+			message: "SMTP_ADDR is required when SMTP is configured",
+		},
+		{
+			name:    "invalid smtp addr",
+			mode:    ModeWorker,
+			env:     replace(validEnv(), "SMTP_ADDR=127.0.0.1"),
+			message: "SMTP_ADDR must be host:port",
+		},
+		{
+			name:    "missing smtp from",
+			mode:    ModeWorker,
+			env:     without(validEnv(), "SMTP_FROM"),
+			message: "SMTP_FROM is required when SMTP is configured",
+		},
+		{
+			name:    "invalid smtp from",
+			mode:    ModeWorker,
+			env:     replace(validEnv(), "SMTP_FROM=alerts"),
+			message: "SMTP_FROM must be an email address",
+		},
+		{
+			name:    "smtp password without username",
+			mode:    ModeWorker,
+			env:     without(validEnv(), "SMTP_USERNAME"),
+			message: "SMTP_USERNAME is required when SMTP_PASSWORD is set",
+		},
 	}
 
 	for _, tc := range cases {
@@ -163,7 +213,12 @@ func validEnv() []string {
 		"WORKER_CONCURRENCY=4",
 		"MIGRATIONS_DIR=migrations",
 		"TELEGRAM_API_BASE_URL=https://api.telegram.org",
+		"SMTP_ADDR=127.0.0.1:2525",
+		"SMTP_USERNAME=mailer",
+		"SMTP_PASSWORD=secret",
+		"SMTP_FROM=alerts@example.test",
 		"NOTIFICATION_BATCH_SIZE=10",
+		"RETENTION_BATCH_SIZE=500",
 	}
 }
 

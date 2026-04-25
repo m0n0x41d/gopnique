@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
+	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
@@ -24,7 +26,7 @@ func TestSentryStoreRouteIngestsAfterAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
@@ -45,12 +47,102 @@ func TestSentryEnvelopeRouteDeniesMissingAuth(t *testing.T) {
 	)
 	response := httptest.NewRecorder()
 	backend := newFakeSentryBackend(t)
-	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
 
 	mux.ServeHTTP(response, request)
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("unexpected status: %d", response.Code)
+	}
+}
+
+func TestSentrySecurityRouteIngestsCSPReport(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/42/security/?sentry_key=550e8400e29b41d4a716446655440000",
+		strings.NewReader(`{"csp-report":{"document-uri":"https://app.example.test","effective-directive":"script-src","blocked-uri":"https://cdn.bad.test/app.js"}}`),
+	)
+	response := httptest.NewRecorder()
+	backend := newFakeSentryBackend(t)
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
+	}
+
+	if !strings.Contains(response.Body.String(), `"id"`) {
+		t.Fatalf("unexpected body: %s", response.Body.String())
+	}
+}
+
+func TestSentrySecurityRouteRejectsUnsupportedCSPReport(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/42/security/?sentry_key=550e8400e29b41d4a716446655440000",
+		strings.NewReader(`{"hello":"world"}`),
+	)
+	response := httptest.NewRecorder()
+	backend := newFakeSentryBackend(t)
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSentryStoreRouteMapsQuotaTo429(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/42/store/?sentry_key=550e8400e29b41d4a716446655440000",
+		strings.NewReader(`{"event_id":"550e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","message":"hello"}`),
+	)
+	response := httptest.NewRecorder()
+	backend := newFakeSentryBackend(t)
+	backend.quota = ingest.NewQuotaRejected("project_quota_exceeded")
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+
+	if response.Header().Get("Retry-After") != "60" {
+		t.Fatalf("expected retry header, got %q", response.Header().Get("Retry-After"))
+	}
+
+	if !strings.Contains(response.Body.String(), "project_quota_exceeded") {
+		t.Fatalf("unexpected body: %s", response.Body.String())
+	}
+}
+
+func TestSentryStoreRouteMapsRateLimitTo429(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/42/store/?sentry_key=550e8400e29b41d4a716446655440000",
+		strings.NewReader(`{"event_id":"550e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","message":"hello"}`),
+	)
+	response := httptest.NewRecorder()
+	backend := newFakeSentryBackend(t)
+	backend.rateLimit = ratelimitapp.NewRejected("project_key_rate_limited", 15*time.Second)
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("unexpected status: %d", response.Code)
+	}
+
+	if response.Header().Get("Retry-After") != "15" {
+		t.Fatalf("expected retry header, got %q", response.Header().Get("Retry-After"))
+	}
+
+	if !strings.Contains(response.Body.String(), "project_key_rate_limited") {
+		t.Fatalf("unexpected body: %s", response.Body.String())
 	}
 }
 
@@ -123,8 +215,10 @@ func TestDecodeSentryAuthCarrierRejectsConflictingSources(t *testing.T) {
 }
 
 type fakeSentryBackend struct {
-	auth    domain.ProjectAuth
-	issueID domain.IssueID
+	auth      domain.ProjectAuth
+	issueID   domain.IssueID
+	quota     ingest.QuotaDecision
+	rateLimit ratelimitapp.Decision
 }
 
 func newFakeSentryBackend(t *testing.T) fakeSentryBackend {
@@ -157,9 +251,23 @@ func (backend fakeSentryBackend) Run(
 	ctx context.Context,
 	program ingest.IngestProgram,
 ) result.Result[ingest.IngestTransactionResult] {
-	ports := fakeSentryPorts{issueID: backend.issueID}
+	ports := fakeSentryPorts{
+		issueID: backend.issueID,
+		quota:   backend.quota,
+	}
 
 	return program(ctx, ports)
+}
+
+func (backend fakeSentryBackend) CheckRateLimit(
+	ctx context.Context,
+	command ratelimitapp.Command,
+) result.Result[ratelimitapp.Decision] {
+	if backend.rateLimit.Reason() != "" {
+		return result.Ok(backend.rateLimit)
+	}
+
+	return result.Ok(ratelimitapp.NewAllowed())
 }
 
 func (backend fakeSentryBackend) ListIssues(
@@ -279,6 +387,7 @@ func mustSessionToken(seed string) operators.SessionToken {
 
 type fakeSentryPorts struct {
 	issueID domain.IssueID
+	quota   ingest.QuotaDecision
 }
 
 func (ports fakeSentryPorts) Exists(
@@ -294,6 +403,17 @@ func (ports fakeSentryPorts) Append(
 	event ingestplan.AcceptedEvent,
 ) result.Result[ingest.EventAppendResult] {
 	return result.Ok(ingest.NewAppendedEvent())
+}
+
+func (ports fakeSentryPorts) CheckQuota(
+	ctx context.Context,
+	event domain.CanonicalEvent,
+) result.Result[ingest.QuotaDecision] {
+	if ports.quota.Reason() != "" {
+		return result.Ok(ports.quota)
+	}
+
+	return result.Ok(ingest.NewQuotaAllowed())
 }
 
 func (ports fakeSentryPorts) Apply(

@@ -35,6 +35,38 @@ func TestTelegramIssueOpenedTextBuildsCanonicalMessage(t *testing.T) {
 	}
 }
 
+func TestEmailIssueOpenedMessageBuildsCanonicalMessage(t *testing.T) {
+	openedResult := NewIssueOpened(issueEvent(t), issueID(t), 42)
+	opened, openedErr := openedResult.Value()
+	if openedErr != nil {
+		t.Fatalf("issue opened: %v", openedErr)
+	}
+
+	messageResult := EmailIssueOpenedMessage(opened, "http://127.0.0.1:8085/")
+	message, messageErr := messageResult.Value()
+	if messageErr != nil {
+		t.Fatalf("email message: %v", messageErr)
+	}
+
+	if message.Subject().String() != "New issue #42: panic: broken pipe" {
+		t.Fatalf("unexpected subject: %s", message.Subject().String())
+	}
+
+	expectedParts := []string{
+		"New issue #42",
+		"Title: panic: broken pipe",
+		"Level: error",
+		"Platform: go",
+		"Event: 950e8400-e29b-41d4-a716-446655440000",
+		"http://127.0.0.1:8085/issues/33333333-3333-4333-a333-333333333333",
+	}
+	for _, part := range expectedParts {
+		if !strings.Contains(message.Body().String(), part) {
+			t.Fatalf("expected message to contain %q, got %q", part, message.Body().String())
+		}
+	}
+}
+
 func issueEvent(t *testing.T) domain.CanonicalEvent {
 	t.Helper()
 

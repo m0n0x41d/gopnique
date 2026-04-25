@@ -10,9 +10,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/discord"
+	emailadapter "github.com/ivanzakutnii/error-tracker/internal/adapters/email"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/googlechat"
 	httpadapter "github.com/ivanzakutnii/error-tracker/internal/adapters/http"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/netresolver"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/ntfy"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/postgres"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/teams"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/telegram"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/webhook"
 	"github.com/ivanzakutnii/error-tracker/internal/runtime/config"
@@ -69,6 +74,7 @@ func runServer(env []string, stdout io.Writer, stderr io.Writer, mode config.Mod
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
 		store,
 		store,
 		store,
@@ -146,6 +152,7 @@ func runAllInOne(env []string, stdout io.Writer, stderr io.Writer) int {
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
 		store,
 		store,
 		store,
@@ -328,6 +335,42 @@ func newWorker(cfg config.Config, store *postgres.Store) (worker.Worker, error) 
 				BatchSize: cfg.NotificationBatchSize,
 			},
 		),
+		worker.NewDiscordTask(
+			store,
+			resolver,
+			discord.NewSender(http.DefaultClient),
+			worker.DiscordTaskConfig{
+				PublicURL: cfg.PublicURL,
+				BatchSize: cfg.NotificationBatchSize,
+			},
+		),
+		worker.NewGoogleChatTask(
+			store,
+			resolver,
+			googlechat.NewSender(http.DefaultClient),
+			worker.GoogleChatTaskConfig{
+				PublicURL: cfg.PublicURL,
+				BatchSize: cfg.NotificationBatchSize,
+			},
+		),
+		worker.NewNtfyTask(
+			store,
+			resolver,
+			ntfy.NewSender(http.DefaultClient),
+			worker.NtfyTaskConfig{
+				PublicURL: cfg.PublicURL,
+				BatchSize: cfg.NotificationBatchSize,
+			},
+		),
+		worker.NewTeamsTask(
+			store,
+			resolver,
+			teams.NewSender(http.DefaultClient),
+			worker.TeamsTaskConfig{
+				PublicURL: cfg.PublicURL,
+				BatchSize: cfg.NotificationBatchSize,
+			},
+		),
 	}
 	if cfg.TelegramBotToken != "" {
 		sender, senderErr := telegram.NewSender(
@@ -348,6 +391,35 @@ func newWorker(cfg config.Config, store *postgres.Store) (worker.Worker, error) 
 			},
 		))
 	}
+
+	if cfg.SMTPEnabled() {
+		sender, senderErr := emailadapter.NewSender(
+			emailadapter.SMTPMailer{},
+			emailadapter.SenderConfig{
+				Addr:     cfg.SMTPAddr,
+				Username: cfg.SMTPUsername,
+				Password: cfg.SMTPPassword,
+				From:     cfg.SMTPFrom,
+			},
+		)
+		if senderErr != nil {
+			return worker.Worker{}, senderErr
+		}
+
+		tasks = append(tasks, worker.NewEmailTask(
+			store,
+			sender,
+			worker.EmailTaskConfig{
+				PublicURL: cfg.PublicURL,
+				BatchSize: cfg.NotificationBatchSize,
+			},
+		))
+	}
+
+	tasks = append(tasks, worker.NewRetentionTask(
+		store,
+		worker.RetentionTaskConfig{BatchSize: cfg.RetentionBatchSize},
+	))
 
 	return worker.New(tasks...), nil
 }

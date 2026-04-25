@@ -29,8 +29,16 @@ type IssueOpenedOutbox interface {
 	) result.Result[IssueOpenedEnqueueResult]
 }
 
+type QuotaGate interface {
+	CheckQuota(
+		ctx context.Context,
+		event domain.CanonicalEvent,
+	) result.Result[QuotaDecision]
+}
+
 type TransactionalIngestPorts interface {
 	EventJournal
+	QuotaGate
 	IssueIndex
 	IssueOpenedOutbox
 }

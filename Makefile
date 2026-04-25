@@ -28,13 +28,13 @@ license-audit:
 	sh scripts/license_audit.sh
 
 repository-tests:
-	ERROR_TRACKER_REPOSITORY_POSTGRES_URL="$(REPOSITORY_POSTGRES_URL)" go test -tags=integration ./internal/adapters/postgres -run 'TestPostgres(RepositoryContract|IssueShortIDConcurrency)' -count=1 -v
+	ERROR_TRACKER_REPOSITORY_POSTGRES_URL="$(REPOSITORY_POSTGRES_URL)" go test -tags=integration ./internal/adapters/postgres -run 'TestPostgres(RepositoryContract|IssueShortIDConcurrency|RetentionPurgesScopedProjectData|QuotaRejectsBeforePersistence)' -count=1 -v
 
 all-in-one-smoke:
 	ERROR_TRACKER_E2E_POSTGRES_URL="$(E2E_POSTGRES_URL)" go test -tags=integration ./internal/e2e -run TestAllInOneProcessSmoke -count=1 -v
 
 e2e:
-	ERROR_TRACKER_E2E_POSTGRES_URL="$(E2E_POSTGRES_URL)" go test -tags=integration ./internal/e2e -run TestPostgresM1M2E2E -count=1 -v
+	ERROR_TRACKER_E2E_POSTGRES_URL="$(E2E_POSTGRES_URL)" go test -tags=integration ./internal/e2e -run 'TestPostgres(M1M2E2E|RateLimitE2E|SecurityCSPE2E)' -count=1 -v
 
 sdk-fixtures:
 	ERROR_TRACKER_SDK_FIXTURE_POSTGRES_URL="$(SDK_FIXTURE_POSTGRES_URL)" go test -tags=sdkfixtures ./internal/sdkfixtures -run TestSentrySDKFixtureReplay -count=1 -v

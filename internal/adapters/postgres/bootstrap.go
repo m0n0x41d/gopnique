@@ -232,6 +232,11 @@ func (store *Store) bootstrapInTx(
 		return BootstrapResult{}, organizationErr
 	}
 
+	organizationQuotaErr := ensureOrganizationQuotaPolicy(ctx, tx, organizationID, now)
+	if organizationQuotaErr != nil {
+		return BootstrapResult{}, organizationQuotaErr
+	}
+
 	operatorID, operatorErr := upsertOperator(ctx, tx, input, now)
 	if operatorErr != nil {
 		return BootstrapResult{}, operatorErr
@@ -252,6 +257,16 @@ func (store *Store) bootstrapInTx(
 		return BootstrapResult{}, projectLinkErr
 	}
 
+	retentionErr := ensureProjectRetentionPolicy(ctx, tx, organizationID, projectID, now)
+	if retentionErr != nil {
+		return BootstrapResult{}, retentionErr
+	}
+
+	projectQuotaErr := ensureProjectQuotaPolicy(ctx, tx, organizationID, projectID, now)
+	if projectQuotaErr != nil {
+		return BootstrapResult{}, projectQuotaErr
+	}
+
 	teamID, teamErr := upsertDefaultTeam(ctx, tx, organizationID, now)
 	if teamErr != nil {
 		return BootstrapResult{}, teamErr
@@ -270,6 +285,11 @@ func (store *Store) bootstrapInTx(
 	publicKey, keyErr := ensureProjectKey(ctx, tx, projectID, now)
 	if keyErr != nil {
 		return BootstrapResult{}, keyErr
+	}
+
+	rateLimitErr := ensureProjectKeyRateLimitPolicy(ctx, tx, organizationID, projectID, publicKey, now)
+	if rateLimitErr != nil {
+		return BootstrapResult{}, rateLimitErr
 	}
 
 	auditErr := insertAuditEvent(ctx, tx, auditEventInput{
@@ -512,6 +532,94 @@ returning id
 	err := tx.QueryRow(ctx, query, id, organizationID, input.ProjectSlug, input.ProjectName, now).Scan(&projectID)
 
 	return projectID, err
+}
+
+func ensureProjectRetentionPolicy(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	now time.Time,
+) error {
+	query := `
+insert into project_retention_policies (
+  organization_id,
+  project_id,
+  created_at,
+  updated_at
+) values ($1, $2, $3, $3)
+on conflict (project_id) do nothing
+`
+	_, err := tx.Exec(ctx, query, organizationID, projectID, now)
+
+	return err
+}
+
+func ensureOrganizationQuotaPolicy(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	now time.Time,
+) error {
+	query := `
+insert into organization_quota_policies (
+  organization_id,
+  created_at,
+  updated_at
+) values ($1, $2, $2)
+on conflict (organization_id) do nothing
+`
+	_, err := tx.Exec(ctx, query, organizationID, now)
+
+	return err
+}
+
+func ensureProjectQuotaPolicy(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	now time.Time,
+) error {
+	query := `
+insert into project_quota_policies (
+  organization_id,
+  project_id,
+  created_at,
+  updated_at
+) values ($1, $2, $3, $3)
+on conflict (project_id) do nothing
+`
+	_, err := tx.Exec(ctx, query, organizationID, projectID, now)
+
+	return err
+}
+
+func ensureProjectKeyRateLimitPolicy(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID string,
+	projectID string,
+	publicKey string,
+	now time.Time,
+) error {
+	query := `
+insert into project_key_rate_limit_policies (
+  project_key_id,
+  organization_id,
+  project_id,
+  created_at,
+  updated_at
+)
+select id, $1, $2, $4, $4
+from project_keys
+where project_id = $2
+  and public_key = $3
+on conflict (project_key_id) do nothing
+`
+	_, err := tx.Exec(ctx, query, organizationID, projectID, publicKey, now)
+
+	return err
 }
 
 func ensureProjectKey(

@@ -155,6 +155,310 @@ func createWebhookDestinationHandler(
 	}
 }
 
+func createEmailDestinationHandler(
+	manager settingsapp.Manager,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddEmailDestination(
+			r.Context(),
+			manager,
+			settingsapp.AddEmailDestinationCommand{
+				Scope:   settingsScopeFromSession(session),
+				Address: r.PostFormValue("address"),
+				Label:   r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=email-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "Email destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
+func createDiscordDestinationHandler(
+	manager settingsapp.Manager,
+	resolver outbound.Resolver,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddDiscordDestination(
+			r.Context(),
+			resolver,
+			manager,
+			settingsapp.AddDiscordDestinationCommand{
+				Scope: settingsScopeFromSession(session),
+				URL:   r.PostFormValue("url"),
+				Label: r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=discord-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "Discord destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
+func createGoogleChatDestinationHandler(
+	manager settingsapp.Manager,
+	resolver outbound.Resolver,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddGoogleChatDestination(
+			r.Context(),
+			resolver,
+			manager,
+			settingsapp.AddGoogleChatDestinationCommand{
+				Scope: settingsScopeFromSession(session),
+				URL:   r.PostFormValue("url"),
+				Label: r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=google-chat-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "Google Chat destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
+func createNtfyDestinationHandler(
+	manager settingsapp.Manager,
+	resolver outbound.Resolver,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddNtfyDestination(
+			r.Context(),
+			resolver,
+			manager,
+			settingsapp.AddNtfyDestinationCommand{
+				Scope: settingsScopeFromSession(session),
+				URL:   r.PostFormValue("url"),
+				Topic: r.PostFormValue("topic"),
+				Label: r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=ntfy-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "ntfy destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
+func createTeamsDestinationHandler(
+	manager settingsapp.Manager,
+	resolver outbound.Resolver,
+	access operators.Access,
+	sessions SessionCodec,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		session, sessionOK := requireOperatorPermission(
+			w,
+			r,
+			access,
+			sessions,
+			operators.PermissionManageAlerts,
+		)
+		if !sessionOK {
+			return
+		}
+
+		parseErr := r.ParseForm()
+		if parseErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: "Invalid form",
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		commandResult := settingsapp.AddTeamsDestination(
+			r.Context(),
+			resolver,
+			manager,
+			settingsapp.AddTeamsDestinationCommand{
+				Scope: settingsScopeFromSession(session),
+				URL:   r.PostFormValue("url"),
+				Label: r.PostFormValue("label"),
+			},
+		)
+		_, commandErr := commandResult.Value()
+		if commandErr != nil {
+			message := templates.NotificationSettingsMessage{
+				Text: commandErr.Error(),
+				Kind: "error",
+			}
+			renderNotificationSettings(w, r, manager, session, message, isHTMX(r), http.StatusBadRequest)
+			return
+		}
+
+		if !isHTMX(r) {
+			http.Redirect(w, r, "/settings/notifications?saved=teams-destination", http.StatusSeeOther)
+			return
+		}
+
+		message := templates.NotificationSettingsMessage{
+			Text: "Microsoft Teams destination saved",
+			Kind: "success",
+		}
+		renderNotificationSettings(w, r, manager, session, message, true, http.StatusOK)
+	}
+}
+
 func createIssueOpenedAlertHandler(
 	manager settingsapp.Manager,
 	access operators.Access,
@@ -329,6 +633,41 @@ func settingsMessageFromNotice(notice string) templates.NotificationSettingsMess
 	if notice == "webhook-destination" {
 		return templates.NotificationSettingsMessage{
 			Text: "Webhook destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "email-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "Email destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "discord-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "Discord destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "google-chat-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "Google Chat destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "ntfy-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "ntfy destination saved",
+			Kind: "success",
+		}
+	}
+
+	if notice == "teams-destination" {
+		return templates.NotificationSettingsMessage{
+			Text: "Microsoft Teams destination saved",
 			Kind: "success",
 		}
 	}

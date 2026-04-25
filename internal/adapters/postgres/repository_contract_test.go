@@ -23,6 +23,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
+	statsapp "github.com/ivanzakutnii/error-tracker/internal/app/stats"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
@@ -43,8 +44,8 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 16 {
-		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 25 {
+		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{
@@ -224,6 +225,81 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("webhook destination: %v", webhookErr)
 	}
 
+	emailResult := settingsapp.AddEmailDestination(
+		ctx,
+		store,
+		settingsapp.AddEmailDestinationCommand{
+			Scope:   scope,
+			Address: "ops@example.test",
+			Label:   "ops-email",
+		},
+	)
+	emailDestination, emailErr := emailResult.Value()
+	if emailErr != nil {
+		t.Fatalf("email destination: %v", emailErr)
+	}
+
+	discordResult := settingsapp.AddDiscordDestination(
+		ctx,
+		repositoryResolver{"discord.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
+		store,
+		settingsapp.AddDiscordDestinationCommand{
+			Scope: scope,
+			URL:   "https://discord.example.com/webhook",
+			Label: "ops-discord",
+		},
+	)
+	discordDestination, discordErr := discordResult.Value()
+	if discordErr != nil {
+		t.Fatalf("discord destination: %v", discordErr)
+	}
+
+	googleChatResult := settingsapp.AddGoogleChatDestination(
+		ctx,
+		repositoryResolver{"chat.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
+		store,
+		settingsapp.AddGoogleChatDestinationCommand{
+			Scope: scope,
+			URL:   "https://chat.example.com/webhook",
+			Label: "ops-google-chat",
+		},
+	)
+	googleChatDestination, googleChatErr := googleChatResult.Value()
+	if googleChatErr != nil {
+		t.Fatalf("google chat destination: %v", googleChatErr)
+	}
+
+	ntfyResult := settingsapp.AddNtfyDestination(
+		ctx,
+		repositoryResolver{"ntfy.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
+		store,
+		settingsapp.AddNtfyDestinationCommand{
+			Scope: scope,
+			URL:   "https://ntfy.example.com",
+			Topic: "ops-alerts",
+			Label: "ops-ntfy",
+		},
+	)
+	ntfyDestination, ntfyErr := ntfyResult.Value()
+	if ntfyErr != nil {
+		t.Fatalf("ntfy destination: %v", ntfyErr)
+	}
+
+	teamsResult := settingsapp.AddTeamsDestination(
+		ctx,
+		repositoryResolver{"teams.example.com": []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
+		store,
+		settingsapp.AddTeamsDestinationCommand{
+			Scope: scope,
+			URL:   "https://teams.example.com/webhook",
+			Label: "ops-teams",
+		},
+	)
+	teamsDestination, teamsErr := teamsResult.Value()
+	if teamsErr != nil {
+		t.Fatalf("microsoft teams destination: %v", teamsErr)
+	}
+
 	alertResult := settingsapp.AddIssueOpenedTelegramAlert(
 		ctx,
 		store,
@@ -253,12 +329,94 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("issue-opened webhook alert: %v", webhookAlertErr)
 	}
 
+	emailAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderEmail,
+			DestinationID: emailDestination.DestinationID,
+			Name:          "Issue opened to Email",
+		},
+	)
+	_, emailAlertErr := emailAlertResult.Value()
+	if emailAlertErr != nil {
+		t.Fatalf("issue-opened email alert: %v", emailAlertErr)
+	}
+
+	discordAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderDiscord,
+			DestinationID: discordDestination.DestinationID,
+			Name:          "Issue opened to Discord",
+		},
+	)
+	_, discordAlertErr := discordAlertResult.Value()
+	if discordAlertErr != nil {
+		t.Fatalf("issue-opened discord alert: %v", discordAlertErr)
+	}
+
+	googleChatAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderGoogleChat,
+			DestinationID: googleChatDestination.DestinationID,
+			Name:          "Issue opened to Google Chat",
+		},
+	)
+	_, googleChatAlertErr := googleChatAlertResult.Value()
+	if googleChatAlertErr != nil {
+		t.Fatalf("issue-opened google chat alert: %v", googleChatAlertErr)
+	}
+
+	ntfyAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderNtfy,
+			DestinationID: ntfyDestination.DestinationID,
+			Name:          "Issue opened to ntfy",
+		},
+	)
+	_, ntfyAlertErr := ntfyAlertResult.Value()
+	if ntfyAlertErr != nil {
+		t.Fatalf("issue-opened ntfy alert: %v", ntfyAlertErr)
+	}
+
+	teamsAlertResult := settingsapp.AddIssueOpenedAlert(
+		ctx,
+		store,
+		settingsapp.AddIssueOpenedAlertCommand{
+			Scope:         scope,
+			Provider:      domain.AlertActionProviderTeams,
+			DestinationID: teamsDestination.DestinationID,
+			Name:          "Issue opened to Microsoft Teams",
+		},
+	)
+	_, teamsAlertErr := teamsAlertResult.Value()
+	if teamsAlertErr != nil {
+		t.Fatalf("issue-opened microsoft teams alert: %v", teamsAlertErr)
+	}
+
 	settingsResult := settingsapp.ShowProjectSettings(ctx, store, settingsapp.ProjectSettingsQuery{Scope: scope})
 	settings, settingsErr := settingsResult.Value()
 	if settingsErr != nil {
 		t.Fatalf("project settings: %v", settingsErr)
 	}
-	if len(settings.TelegramDestinations) != 1 || len(settings.WebhookDestinations) != 1 || len(settings.IssueOpenedAlerts) != 2 {
+	if len(settings.TelegramDestinations) != 1 ||
+		len(settings.WebhookDestinations) != 1 ||
+		len(settings.EmailDestinations) != 1 ||
+		len(settings.DiscordDestinations) != 1 ||
+		len(settings.GoogleChatDestinations) != 1 ||
+		len(settings.NtfyDestinations) != 1 ||
+		len(settings.TeamsDestinations) != 1 ||
+		len(settings.IssueOpenedAlerts) != 7 {
 		t.Fatalf("unexpected settings view: %#v", settings)
 	}
 
@@ -289,6 +447,29 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	}
 	if duplicate.Kind() != ingest.ReceiptDuplicateEvent {
 		t.Fatalf("unexpected duplicate receipt: %s", duplicate.Kind())
+	}
+
+	statsResult := statsapp.ShowProjectStats(
+		ctx,
+		store,
+		statsapp.Query{
+			Scope: statsapp.Scope{
+				OrganizationID: auth.OrganizationID(),
+				ProjectID:      auth.ProjectID(),
+			},
+			Period: statsapp.Period24h,
+			Now:    time.Date(2026, 4, 24, 13, 30, 0, 0, time.UTC),
+		},
+	)
+	statsView, statsErr := statsResult.Value()
+	if statsErr != nil {
+		t.Fatalf("project stats: %v", statsErr)
+	}
+	if statsView.TotalEvents != 2 || statsView.IssueEvents != 2 || statsView.TransactionEvents != 0 {
+		t.Fatalf("unexpected event stats: %#v", statsView)
+	}
+	if statsView.MaxBucketEvents != 2 || len(statsView.Buckets) != 24 {
+		t.Fatalf("unexpected bucket stats: %#v", statsView)
 	}
 
 	issueListResult := issueapp.List(
@@ -354,6 +535,26 @@ func TestPostgresRepositoryContract(t *testing.T) {
 	}
 	if len(reports.Items) != 1 || reports.Items[0].Comments != "Repository contract report" {
 		t.Fatalf("unexpected user reports: %#v", reports.Items)
+	}
+
+	reportedStatsResult := statsapp.ShowProjectStats(
+		ctx,
+		store,
+		statsapp.Query{
+			Scope: statsapp.Scope{
+				OrganizationID: auth.OrganizationID(),
+				ProjectID:      auth.ProjectID(),
+			},
+			Period: statsapp.Period24h,
+			Now:    time.Date(2026, 4, 24, 13, 30, 0, 0, time.UTC),
+		},
+	)
+	reportedStats, reportedStatsErr := reportedStatsResult.Value()
+	if reportedStatsErr != nil {
+		t.Fatalf("reported project stats: %v", reportedStatsErr)
+	}
+	if reportedStats.UserReports != 1 {
+		t.Fatalf("unexpected user report stats: %#v", reportedStats)
 	}
 
 	commentResult := issueapp.AddComment(
@@ -590,6 +791,76 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("expected webhook lease to hide claimed delivery, got %d", len(secondWebhookClaim))
 	}
 
+	emailDeliveries := claimEmailConcurrently(t, ctx, store)
+	if len(emailDeliveries) != 1 {
+		t.Fatalf("expected one email delivery, got %d", len(emailDeliveries))
+	}
+
+	secondEmailClaimResult := store.ClaimEmailDeliveries(ctx, time.Now().UTC(), 10)
+	secondEmailClaim, secondEmailClaimErr := secondEmailClaimResult.Value()
+	if secondEmailClaimErr != nil {
+		t.Fatalf("second email claim: %v", secondEmailClaimErr)
+	}
+	if len(secondEmailClaim) != 0 {
+		t.Fatalf("expected email lease to hide claimed delivery, got %d", len(secondEmailClaim))
+	}
+
+	discordDeliveries := claimDiscordConcurrently(t, ctx, store)
+	if len(discordDeliveries) != 1 {
+		t.Fatalf("expected one discord delivery, got %d", len(discordDeliveries))
+	}
+
+	secondDiscordClaimResult := store.ClaimDiscordDeliveries(ctx, time.Now().UTC(), 10)
+	secondDiscordClaim, secondDiscordClaimErr := secondDiscordClaimResult.Value()
+	if secondDiscordClaimErr != nil {
+		t.Fatalf("second discord claim: %v", secondDiscordClaimErr)
+	}
+	if len(secondDiscordClaim) != 0 {
+		t.Fatalf("expected discord lease to hide claimed delivery, got %d", len(secondDiscordClaim))
+	}
+
+	googleChatDeliveries := claimGoogleChatConcurrently(t, ctx, store)
+	if len(googleChatDeliveries) != 1 {
+		t.Fatalf("expected one google chat delivery, got %d", len(googleChatDeliveries))
+	}
+
+	secondGoogleChatClaimResult := store.ClaimGoogleChatDeliveries(ctx, time.Now().UTC(), 10)
+	secondGoogleChatClaim, secondGoogleChatClaimErr := secondGoogleChatClaimResult.Value()
+	if secondGoogleChatClaimErr != nil {
+		t.Fatalf("second google chat claim: %v", secondGoogleChatClaimErr)
+	}
+	if len(secondGoogleChatClaim) != 0 {
+		t.Fatalf("expected google chat lease to hide claimed delivery, got %d", len(secondGoogleChatClaim))
+	}
+
+	ntfyDeliveries := claimNtfyConcurrently(t, ctx, store)
+	if len(ntfyDeliveries) != 1 {
+		t.Fatalf("expected one ntfy delivery, got %d", len(ntfyDeliveries))
+	}
+
+	secondNtfyClaimResult := store.ClaimNtfyDeliveries(ctx, time.Now().UTC(), 10)
+	secondNtfyClaim, secondNtfyClaimErr := secondNtfyClaimResult.Value()
+	if secondNtfyClaimErr != nil {
+		t.Fatalf("second ntfy claim: %v", secondNtfyClaimErr)
+	}
+	if len(secondNtfyClaim) != 0 {
+		t.Fatalf("expected ntfy lease to hide claimed delivery, got %d", len(secondNtfyClaim))
+	}
+
+	teamsDeliveries := claimTeamsConcurrently(t, ctx, store)
+	if len(teamsDeliveries) != 1 {
+		t.Fatalf("expected one microsoft teams delivery, got %d", len(teamsDeliveries))
+	}
+
+	secondTeamsClaimResult := store.ClaimTeamsDeliveries(ctx, time.Now().UTC(), 10)
+	secondTeamsClaim, secondTeamsClaimErr := secondTeamsClaimResult.Value()
+	if secondTeamsClaimErr != nil {
+		t.Fatalf("second microsoft teams claim: %v", secondTeamsClaimErr)
+	}
+	if len(secondTeamsClaim) != 0 {
+		t.Fatalf("expected microsoft teams lease to hide claimed delivery, got %d", len(secondTeamsClaim))
+	}
+
 	markResult := store.MarkTelegramDelivered(
 		ctx,
 		deliveries[0].IntentID(),
@@ -612,8 +883,68 @@ func TestPostgresRepositoryContract(t *testing.T) {
 		t.Fatalf("mark webhook delivered: %v", markWebhookErr)
 	}
 
+	markEmailResult := store.MarkEmailDelivered(
+		ctx,
+		emailDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewEmailSendReceipt("<repo-email@example.test>"),
+	)
+	_, markEmailErr := markEmailResult.Value()
+	if markEmailErr != nil {
+		t.Fatalf("mark email delivered: %v", markEmailErr)
+	}
+
+	markDiscordResult := store.MarkDiscordDelivered(
+		ctx,
+		discordDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewDiscordDeliveredReceipt(204),
+	)
+	_, markDiscordErr := markDiscordResult.Value()
+	if markDiscordErr != nil {
+		t.Fatalf("mark discord delivered: %v", markDiscordErr)
+	}
+
+	markGoogleChatResult := store.MarkGoogleChatDelivered(
+		ctx,
+		googleChatDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewGoogleChatDeliveredReceipt(200),
+	)
+	_, markGoogleChatErr := markGoogleChatResult.Value()
+	if markGoogleChatErr != nil {
+		t.Fatalf("mark google chat delivered: %v", markGoogleChatErr)
+	}
+
+	markNtfyResult := store.MarkNtfyDelivered(
+		ctx,
+		ntfyDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewNtfyDeliveredReceipt(200),
+	)
+	_, markNtfyErr := markNtfyResult.Value()
+	if markNtfyErr != nil {
+		t.Fatalf("mark ntfy delivered: %v", markNtfyErr)
+	}
+
+	markTeamsResult := store.MarkTeamsDelivered(
+		ctx,
+		teamsDeliveries[0].IntentID(),
+		time.Now().UTC(),
+		notifications.NewTeamsDeliveredReceipt(200),
+	)
+	_, markTeamsErr := markTeamsResult.Value()
+	if markTeamsErr != nil {
+		t.Fatalf("mark microsoft teams delivered: %v", markTeamsErr)
+	}
+
 	assertRepositoryDeliveredIntent(t, ctx, store, "provider-1")
 	assertRepositoryWebhookDeliveredIntent(t, ctx, store, 204)
+	assertRepositoryEmailDeliveredIntent(t, ctx, store, "<repo-email@example.test>")
+	assertRepositoryDiscordDeliveredIntent(t, ctx, store, 204)
+	assertRepositoryGoogleChatDeliveredIntent(t, ctx, store, 200)
+	assertRepositoryNtfyDeliveredIntent(t, ctx, store, 200)
+	assertRepositoryTeamsDeliveredIntent(t, ctx, store, 200)
 	assertRepositoryEventIDConstraint(t, ctx, store, auth.ProjectID(), event.EventID())
 }
 
@@ -631,8 +962,8 @@ func TestPostgresIssueShortIDConcurrency(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 16 {
-		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 25 {
+		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	bootstrap, bootstrapErr := store.Bootstrap(ctx, BootstrapInput{
@@ -757,6 +1088,236 @@ func collectWebhookClaims(
 		select {
 		case err := <-errors:
 			t.Fatalf("claim webhook deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimEmailConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.EmailDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.EmailDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimEmailDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectEmailClaims(t, results, errors)
+}
+
+func collectEmailClaims(
+	t *testing.T,
+	results <-chan []notifications.EmailDelivery,
+	errors <-chan error,
+) []notifications.EmailDelivery {
+	t.Helper()
+
+	deliveries := []notifications.EmailDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim email deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimDiscordConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.DiscordDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.DiscordDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimDiscordDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectDiscordClaims(t, results, errors)
+}
+
+func collectDiscordClaims(
+	t *testing.T,
+	results <-chan []notifications.DiscordDelivery,
+	errors <-chan error,
+) []notifications.DiscordDelivery {
+	t.Helper()
+
+	deliveries := []notifications.DiscordDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim discord deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimGoogleChatConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.GoogleChatDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.GoogleChatDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimGoogleChatDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectGoogleChatClaims(t, results, errors)
+}
+
+func collectGoogleChatClaims(
+	t *testing.T,
+	results <-chan []notifications.GoogleChatDelivery,
+	errors <-chan error,
+) []notifications.GoogleChatDelivery {
+	t.Helper()
+
+	deliveries := []notifications.GoogleChatDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim google chat deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimNtfyConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.NtfyDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.NtfyDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimNtfyDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectNtfyClaims(t, results, errors)
+}
+
+func collectNtfyClaims(
+	t *testing.T,
+	results <-chan []notifications.NtfyDelivery,
+	errors <-chan error,
+) []notifications.NtfyDelivery {
+	t.Helper()
+
+	deliveries := []notifications.NtfyDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim ntfy deliveries: %v", err)
+		case claimed := <-results:
+			deliveries = append(deliveries, claimed...)
+		}
+	}
+
+	return deliveries
+}
+
+func claimTeamsConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) []notifications.TeamsDelivery {
+	t.Helper()
+
+	results := make(chan []notifications.TeamsDelivery, 2)
+	errors := make(chan error, 2)
+	now := time.Now().UTC()
+	for range 2 {
+		go func() {
+			deliveriesResult := store.ClaimTeamsDeliveries(ctx, now, 10)
+			deliveries, deliveriesErr := deliveriesResult.Value()
+			if deliveriesErr != nil {
+				errors <- deliveriesErr
+				return
+			}
+
+			results <- deliveries
+		}()
+	}
+
+	return collectTeamsClaims(t, results, errors)
+}
+
+func collectTeamsClaims(
+	t *testing.T,
+	results <-chan []notifications.TeamsDelivery,
+	errors <-chan error,
+) []notifications.TeamsDelivery {
+	t.Helper()
+
+	deliveries := []notifications.TeamsDelivery{}
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatalf("claim microsoft teams deliveries: %v", err)
 		case claimed := <-results:
 			deliveries = append(deliveries, claimed...)
 		}
@@ -1058,6 +1619,156 @@ where provider = 'webhook'
 
 	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
 		t.Fatalf("unexpected webhook intent: %s %d %d", status, storedStatusCode, attempts)
+	}
+}
+
+func assertRepositoryEmailDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	providerMessageID string,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_message_id, attempts
+from notification_intents
+where provider = 'email'
+`
+	var status string
+	var storedProviderMessageID string
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedProviderMessageID,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("email delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedProviderMessageID != providerMessageID || attempts != 1 {
+		t.Fatalf("unexpected email intent: %s %s %d", status, storedProviderMessageID, attempts)
+	}
+}
+
+func assertRepositoryDiscordDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	statusCode int,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_status_code, attempts
+from notification_intents
+where provider = 'discord'
+`
+	var status string
+	var storedStatusCode int
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedStatusCode,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("discord delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
+		t.Fatalf("unexpected discord intent: %s %d %d", status, storedStatusCode, attempts)
+	}
+}
+
+func assertRepositoryGoogleChatDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	statusCode int,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_status_code, attempts
+from notification_intents
+where provider = 'google_chat'
+`
+	var status string
+	var storedStatusCode int
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedStatusCode,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("google chat delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
+		t.Fatalf("unexpected google chat intent: %s %d %d", status, storedStatusCode, attempts)
+	}
+}
+
+func assertRepositoryNtfyDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	statusCode int,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_status_code, attempts
+from notification_intents
+where provider = 'ntfy'
+`
+	var status string
+	var storedStatusCode int
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedStatusCode,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("ntfy delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
+		t.Fatalf("unexpected ntfy intent: %s %d %d", status, storedStatusCode, attempts)
+	}
+}
+
+func assertRepositoryTeamsDeliveredIntent(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	statusCode int,
+) {
+	t.Helper()
+
+	query := `
+select status, provider_status_code, attempts
+from notification_intents
+where provider = 'microsoft_teams'
+`
+	var status string
+	var storedStatusCode int
+	var attempts int
+	scanErr := store.pool.QueryRow(ctx, query).Scan(
+		&status,
+		&storedStatusCode,
+		&attempts,
+	)
+	if scanErr != nil {
+		t.Fatalf("microsoft teams delivered intent: %v", scanErr)
+	}
+
+	if status != "delivered" || storedStatusCode != statusCode || attempts != 1 {
+		t.Fatalf("unexpected microsoft teams intent: %s %d %d", status, storedStatusCode, attempts)
 	}
 }
 

@@ -72,7 +72,7 @@ func (store *Store) MigrationStatus(ctx context.Context) (health.MigrationStatus
 		return health.MigrationStatus{}, scanErr
 	}
 
-	status.Ready = status.AppliedCount >= 16
+	status.Ready = status.AppliedCount >= 25
 
 	return status, nil
 }
@@ -263,12 +263,56 @@ on conflict (project_id, event_id) do nothing
 		return result.Ok(ingest.NewDuplicateEvent())
 	}
 
+	statsErr := store.upsertProjectHourlyStats(ctx, canonical)
+	if statsErr != nil {
+		return result.Err[ingest.EventAppendResult](statsErr)
+	}
+
 	tagsErr := store.insertEventTags(ctx, eventRowID, canonical)
 	if tagsErr != nil {
 		return result.Err[ingest.EventAppendResult](tagsErr)
 	}
 
 	return result.Ok(ingest.NewAppendedEvent())
+}
+
+func (store txStore) upsertProjectHourlyStats(
+	ctx context.Context,
+	event domain.CanonicalEvent,
+) error {
+	query := `
+insert into project_hourly_stats (
+  organization_id,
+  project_id,
+  bucket_at,
+  event_count,
+  issue_event_count,
+  transaction_event_count
+) values (
+  $1,
+  $2,
+  date_trunc('hour', $3::timestamptz),
+  1,
+  $4,
+  $5
+)
+on conflict (project_id, bucket_at) do update
+set
+  event_count = project_hourly_stats.event_count + excluded.event_count,
+  issue_event_count = project_hourly_stats.issue_event_count + excluded.issue_event_count,
+  transaction_event_count = project_hourly_stats.transaction_event_count + excluded.transaction_event_count
+`
+	_, execErr := store.tx.Exec(
+		ctx,
+		query,
+		event.OrganizationID().String(),
+		event.ProjectID().String(),
+		event.ReceivedAt().Time(),
+		boolInt(event.CreatesIssue()),
+		boolInt(event.Kind() == domain.EventKindTransaction),
+	)
+
+	return execErr
 }
 
 func canonicalPayloadJSON(event ingestplan.AcceptedEvent) ([]byte, error) {
@@ -318,6 +362,14 @@ on conflict (event_id, key) do update set value = excluded.value
 	}
 
 	return nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+
+	return 0
 }
 
 func nullableText(value string) any {

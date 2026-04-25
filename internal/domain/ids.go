@@ -36,6 +36,26 @@ type WebhookDestinationID struct {
 	value string
 }
 
+type EmailDestinationID struct {
+	value string
+}
+
+type DiscordDestinationID struct {
+	value string
+}
+
+type GoogleChatDestinationID struct {
+	value string
+}
+
+type NtfyDestinationID struct {
+	value string
+}
+
+type TeamsDestinationID struct {
+	value string
+}
+
 type AlertRuleID struct {
 	value string
 }
@@ -115,6 +135,51 @@ func NewWebhookDestinationID(input string) (WebhookDestinationID, error) {
 	return WebhookDestinationID{value: value}, nil
 }
 
+func NewEmailDestinationID(input string) (EmailDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return EmailDestinationID{}, err
+	}
+
+	return EmailDestinationID{value: value}, nil
+}
+
+func NewDiscordDestinationID(input string) (DiscordDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return DiscordDestinationID{}, err
+	}
+
+	return DiscordDestinationID{value: value}, nil
+}
+
+func NewGoogleChatDestinationID(input string) (GoogleChatDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return GoogleChatDestinationID{}, err
+	}
+
+	return GoogleChatDestinationID{value: value}, nil
+}
+
+func NewNtfyDestinationID(input string) (NtfyDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return NtfyDestinationID{}, err
+	}
+
+	return NtfyDestinationID{value: value}, nil
+}
+
+func NewTeamsDestinationID(input string) (TeamsDestinationID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return TeamsDestinationID{}, err
+	}
+
+	return TeamsDestinationID{value: value}, nil
+}
+
 func NewAlertRuleID(input string) (AlertRuleID, error) {
 	value, err := normalizeUUID(input)
 	if err != nil {
@@ -176,6 +241,26 @@ func (id TelegramDestinationID) String() string {
 }
 
 func (id WebhookDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id EmailDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id DiscordDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id GoogleChatDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id NtfyDestinationID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id TeamsDestinationID) String() string {
 	return dashedUUID(id.value)
 }
 

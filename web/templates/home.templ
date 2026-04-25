@@ -24,9 +24,9 @@ templ Layout(title string, active string) {
 					<a href="/releases" class={ railClass(active, "releases") } title="Releases">
 						<svg><use href="#i-project"></use></svg>
 					</a>
-					<span class="rail__btn rail__btn--disabled" title="Dashboard planned">
+					<a href="/stats" class={ railClass(active, "stats") } title="Stats">
 						<svg><use href="#i-dash"></use></svg>
-					</span>
+					</a>
 					<a href="/projects" class={ railClass(active, "projects") } title="Projects & DSN">
 						<svg><use href="#i-project"></use></svg>
 					</a>
@@ -69,6 +69,10 @@ templ Layout(title string, active string) {
 					<div class="side__body">
 						<div class="side__section">
 							<div class="eyebrow side__sectionhead">Runtime</div>
+							<a href="/stats" class={ sideNavClass(active, "stats") }>
+								<svg><use href="#i-dash"></use></svg>
+								<span>Stats</span>
+							</a>
 							<a href="/issues" class={ sideNavClass(active, "issues") }>
 								<svg><use href="#i-issues"></use></svg>
 								<span>Issues</span>

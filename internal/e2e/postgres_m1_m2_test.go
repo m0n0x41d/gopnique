@@ -22,8 +22,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/discord"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/googlechat"
 	httpadapter "github.com/ivanzakutnii/error-tracker/internal/adapters/http"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/ntfy"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/postgres"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/teams"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/telegram"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/webhook"
 	"github.com/ivanzakutnii/error-tracker/internal/app/notifications"
@@ -48,13 +52,14 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 16 {
-		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 25 {
+		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	publicURL := "http://example.test"
 	resolver := e2eResolver{"hooks.example.test": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
@@ -117,6 +122,15 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if !strings.Contains(settingsBefore.Body, "Alert channels") {
 		t.Fatalf("expected notification settings page: %s", settingsBefore.Body)
 	}
+	if !strings.Contains(settingsBefore.Body, "Data retention") || !strings.Contains(settingsBefore.Body, "90d") {
+		t.Fatalf("expected retention policy on settings page: %s", settingsBefore.Body)
+	}
+	if !strings.Contains(settingsBefore.Body, "Quota policy") || !strings.Contains(settingsBefore.Body, "daily events") {
+		t.Fatalf("expected quota policy on settings page: %s", settingsBefore.Body)
+	}
+	if !strings.Contains(settingsBefore.Body, "Rate limit") || !strings.Contains(settingsBefore.Body, "active ingest key") {
+		t.Fatalf("expected rate limit policy on settings page: %s", settingsBefore.Body)
+	}
 	assertMembersPage(t, client, server.URL)
 	apiToken := createAPITokenThroughUI(t, client, server.URL)
 	assertCurrentProjectAPI(t, client, server.URL, apiToken)
@@ -127,6 +141,19 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	webhookServer, webhookURL := newWebhookFixtureServer(t)
 	defer webhookServer.Close()
 	webhookDestinationID := createWebhookDestinationThroughUI(t, ctx, databaseURL, client, server.URL, webhookURL)
+	emailDestinationID := createEmailDestinationThroughUI(t, ctx, databaseURL, client, server.URL)
+	discordServer, discordURL := newDiscordFixtureServer(t)
+	defer discordServer.Close()
+	discordDestinationID := createDiscordDestinationThroughUI(t, ctx, databaseURL, client, server.URL, discordURL)
+	googleChatServer, googleChatURL := newGoogleChatFixtureServer(t)
+	defer googleChatServer.Close()
+	googleChatDestinationID := createGoogleChatDestinationThroughUI(t, ctx, databaseURL, client, server.URL, googleChatURL)
+	ntfyServer, ntfyURL := newNtfyFixtureServer(t)
+	defer ntfyServer.Close()
+	ntfyDestinationID := createNtfyDestinationThroughUI(t, ctx, databaseURL, client, server.URL, ntfyURL)
+	teamsServer, teamsURL := newTeamsFixtureServer(t)
+	defer teamsServer.Close()
+	teamsDestinationID := createTeamsDestinationThroughUI(t, ctx, databaseURL, client, server.URL, teamsURL)
 	noAlertReceipt := postNoAlertStoreEvent(t, client, server.URL, publicKey)
 	if !strings.Contains(noAlertReceipt.Body, `"id":"970e8400e29b41d4a716446655440000"`) {
 		t.Fatalf("unexpected no-alert receipt: %s", noAlertReceipt.Body)
@@ -134,6 +161,11 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	assertNoNotificationIntent(t, ctx, databaseURL, "970e8400-e29b-41d4-a716-446655440000")
 	createIssueOpenedAlertThroughUI(t, client, server.URL, destinationID)
 	createIssueOpenedWebhookAlertThroughUI(t, client, server.URL, webhookDestinationID)
+	createIssueOpenedEmailAlertThroughUI(t, client, server.URL, emailDestinationID)
+	createIssueOpenedDiscordAlertThroughUI(t, client, server.URL, discordDestinationID)
+	createIssueOpenedGoogleChatAlertThroughUI(t, client, server.URL, googleChatDestinationID)
+	createIssueOpenedNtfyAlertThroughUI(t, client, server.URL, ntfyDestinationID)
+	createIssueOpenedTeamsAlertThroughUI(t, client, server.URL, teamsDestinationID)
 	webhookRuleID := firstAlertIDByName(t, ctx, databaseURL, "Issue opened to Webhook")
 	setIssueOpenedAlertThroughUI(t, client, server.URL, webhookRuleID, "disable")
 	setIssueOpenedAlertThroughUI(t, client, server.URL, webhookRuleID, "enable")
@@ -213,6 +245,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	postLegacyUserReportEnvelope(t, client, server.URL, publicKey)
 	postFeedbackEnvelope(t, client, server.URL, publicKey)
 	assertUserReportVisible(t, client, server.URL, issueID)
+	assertProjectStatsPage(t, client, server.URL)
 	addIssueCommentThroughUI(t, client, server.URL, issueID, "E2E operator comment")
 	assertIssueCommentVisible(t, client, server.URL, issueID, "E2E operator comment")
 	teamID := assignIssueThroughUI(t, ctx, databaseURL, client, server.URL, issueID)
@@ -248,6 +281,16 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	assertTelegramDelivered(t, ctx, databaseURL)
 	deliverWebhook(t, ctx, store, resolver, webhookURL)
 	assertWebhookDelivered(t, ctx, databaseURL)
+	deliverEmail(t, ctx, store)
+	assertEmailDelivered(t, ctx, databaseURL)
+	deliverDiscord(t, ctx, store, resolver, discordURL)
+	assertDiscordDelivered(t, ctx, databaseURL)
+	deliverGoogleChat(t, ctx, store, resolver, googleChatURL)
+	assertGoogleChatDelivered(t, ctx, databaseURL)
+	deliverNtfy(t, ctx, store, resolver, ntfyURL)
+	assertNtfyDelivered(t, ctx, databaseURL)
+	deliverTeams(t, ctx, store, resolver, teamsURL)
+	assertTeamsDelivered(t, ctx, databaseURL)
 	assertDeliveryJournal(t, client, server.URL)
 	setOperatorRoles(t, ctx, databaseURL, "operator@example.test", "member", "member")
 	assertProjectMemberRoleGate(t, client, server.URL, issueID)
@@ -903,6 +946,40 @@ func assertUserReportVisible(
 	}
 }
 
+func assertProjectStatsPage(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+
+	response := request(t, client, http.MethodGet, baseURL+"/stats?period=24h", "", nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected stats ok, got %d: %s", response.StatusCode, response.Body)
+	}
+
+	for _, expected := range []string{
+		"Stats",
+		"Project telemetry",
+		"Events",
+		"issue 3",
+		"1<span class=\"unit\">reports</span>",
+		"Trend by hour",
+	} {
+		if !strings.Contains(response.Body, expected) {
+			t.Fatalf("expected stats page to contain %q: %s", expected, response.Body)
+		}
+	}
+
+	daily := request(t, client, http.MethodGet, baseURL+"/stats?period=14d", "", nil)
+	if daily.StatusCode != http.StatusOK {
+		t.Fatalf("expected daily stats ok, got %d: %s", daily.StatusCode, daily.Body)
+	}
+	if !strings.Contains(daily.Body, "Trend by day") {
+		t.Fatalf("expected daily stats page: %s", daily.Body)
+	}
+}
+
 func assertDimensionPages(
 	t *testing.T,
 	client *http.Client,
@@ -1025,6 +1102,321 @@ func createIssueOpenedWebhookAlertThroughUI(
 	}
 }
 
+func createEmailDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-email")
+	form.Set("address", "ops@example.test")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/email-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected email destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-email") {
+		t.Fatalf("expected email destination in fragment: %s", response.Body)
+	}
+
+	return firstEmailDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedEmailAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "email:"+destinationID)
+	form.Set("name", "Issue opened to Email")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected email alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to Email") {
+		t.Fatalf("expected email alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-email") {
+		t.Fatalf("expected email destination in fragment: %s", response.Body)
+	}
+}
+
+func createDiscordDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+	discordURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-discord")
+	form.Set("url", discordURL)
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/discord-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected discord destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-discord") {
+		t.Fatalf("expected discord destination in fragment: %s", response.Body)
+	}
+
+	return firstDiscordDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedDiscordAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "discord:"+destinationID)
+	form.Set("name", "Issue opened to Discord")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected discord alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to Discord") {
+		t.Fatalf("expected discord alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-discord") {
+		t.Fatalf("expected discord destination in fragment: %s", response.Body)
+	}
+}
+
+func createGoogleChatDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+	googleChatURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-google-chat")
+	form.Set("url", googleChatURL)
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/google-chat-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected google chat destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-google-chat") {
+		t.Fatalf("expected google chat destination in fragment: %s", response.Body)
+	}
+
+	return firstGoogleChatDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedGoogleChatAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "google_chat:"+destinationID)
+	form.Set("name", "Issue opened to Google Chat")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected google chat alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to Google Chat") {
+		t.Fatalf("expected google chat alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-google-chat") {
+		t.Fatalf("expected google chat destination in fragment: %s", response.Body)
+	}
+}
+
+func createNtfyDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+	ntfyURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-ntfy")
+	form.Set("url", ntfyURL)
+	form.Set("topic", "ops-alerts")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/ntfy-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected ntfy destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-ntfy") {
+		t.Fatalf("expected ntfy destination in fragment: %s", response.Body)
+	}
+
+	return firstNtfyDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedNtfyAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "ntfy:"+destinationID)
+	form.Set("name", "Issue opened to ntfy")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected ntfy alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to ntfy") {
+		t.Fatalf("expected ntfy alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-ntfy") {
+		t.Fatalf("expected ntfy destination in fragment: %s", response.Body)
+	}
+}
+
+func createTeamsDestinationThroughUI(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+	teamsURL string,
+) string {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("label", "ops-teams")
+	form.Set("url", teamsURL)
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/teams-destinations",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected microsoft teams destination htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-teams") {
+		t.Fatalf("expected microsoft teams destination in fragment: %s", response.Body)
+	}
+
+	return firstTeamsDestinationID(t, ctx, databaseURL)
+}
+
+func createIssueOpenedTeamsAlertThroughUI(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	destinationID string,
+) {
+	t.Helper()
+
+	form := url.Values{}
+	form.Set("destination", "microsoft_teams:"+destinationID)
+	form.Set("name", "Issue opened to Microsoft Teams")
+	response := requestWithHeaders(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/settings/notifications/issue-opened-alerts",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(form.Encode()),
+		map[string]string{"HX-Request": "true"},
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected microsoft teams alert htmx ok, got %d: %s", response.StatusCode, response.Body)
+	}
+	if !strings.Contains(response.Body, "Issue opened to Microsoft Teams") {
+		t.Fatalf("expected microsoft teams alert in fragment: %s", response.Body)
+	}
+	if !strings.Contains(response.Body, "ops-teams") {
+		t.Fatalf("expected microsoft teams destination in fragment: %s", response.Body)
+	}
+}
+
 func setIssueOpenedAlertThroughUI(
 	t *testing.T,
 	client *http.Client,
@@ -1112,6 +1504,111 @@ func firstWebhookDestinationID(t *testing.T, ctx context.Context, databaseURL st
 	).Scan(&destinationID)
 	if scanErr != nil {
 		t.Fatalf("webhook destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstEmailDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from email_destinations where label = 'ops-email'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("email destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstDiscordDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from discord_destinations where label = 'ops-discord'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("discord destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstGoogleChatDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from google_chat_destinations where label = 'ops-google-chat'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("google chat destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstNtfyDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from ntfy_destinations where label = 'ops-ntfy'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("ntfy destination id: %v", scanErr)
+	}
+
+	return destinationID
+}
+
+func firstTeamsDestinationID(t *testing.T, ctx context.Context, databaseURL string) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var destinationID string
+	scanErr := pool.QueryRow(
+		ctx,
+		"select id from teams_destinations where label = 'ops-teams'",
+	).Scan(&destinationID)
+	if scanErr != nil {
+		t.Fatalf("microsoft teams destination id: %v", scanErr)
 	}
 
 	return destinationID
@@ -1601,6 +2098,156 @@ func deliverWebhook(
 	}
 }
 
+func deliverEmail(t *testing.T, ctx context.Context, store *postgres.Store) {
+	t.Helper()
+
+	sender := &e2eEmailSender{}
+	commandResult := notifications.NewEmailBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("email command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverEmailBatch(ctx, command, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("email batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected email receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+
+	if !strings.Contains(sender.body, "http://example.test/issues/") {
+		t.Fatalf("unexpected email body: %s", sender.body)
+	}
+}
+
+func deliverDiscord(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	resolver e2eResolver,
+	discordURL string,
+) {
+	t.Helper()
+
+	client := &http.Client{Transport: rewriteHookTransport(t, discordURL)}
+	sender := discord.NewSender(client)
+	commandResult := notifications.NewDiscordBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("discord command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverDiscordBatch(ctx, command, resolver, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("discord batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected discord receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+}
+
+func deliverGoogleChat(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	resolver e2eResolver,
+	googleChatURL string,
+) {
+	t.Helper()
+
+	client := &http.Client{Transport: rewriteHookTransport(t, googleChatURL)}
+	sender := googlechat.NewSender(client)
+	commandResult := notifications.NewGoogleChatBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("google chat command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverGoogleChatBatch(ctx, command, resolver, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("google chat batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected google chat receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+}
+
+func deliverNtfy(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	resolver e2eResolver,
+	ntfyURL string,
+) {
+	t.Helper()
+
+	client := &http.Client{Transport: rewriteHookTransport(t, ntfyURL)}
+	sender := ntfy.NewSender(client)
+	commandResult := notifications.NewNtfyBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("ntfy command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverNtfyBatch(ctx, command, resolver, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("ntfy batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected ntfy receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+}
+
+func deliverTeams(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	resolver e2eResolver,
+	teamsURL string,
+) {
+	t.Helper()
+
+	client := &http.Client{Transport: rewriteHookTransport(t, teamsURL)}
+	sender := teams.NewSender(client)
+	commandResult := notifications.NewTeamsBatchCommand(time.Now().UTC(), 5, "http://example.test")
+	command, commandErr := commandResult.Value()
+	if commandErr != nil {
+		t.Fatalf("microsoft teams command: %v", commandErr)
+	}
+
+	batchResult := notifications.DeliverTeamsBatch(ctx, command, resolver, store, sender)
+	receipt, batchErr := batchResult.Value()
+	if batchErr != nil {
+		t.Fatalf("microsoft teams batch: %v", batchErr)
+	}
+
+	if receipt.Claimed() < 1 || receipt.Delivered() < 1 {
+		t.Fatalf("unexpected microsoft teams receipt: claimed=%d delivered=%d failed=%d", receipt.Claimed(), receipt.Delivered(), receipt.Failed())
+	}
+}
+
+type e2eEmailSender struct {
+	body string
+}
+
+func (sender *e2eEmailSender) SendEmail(
+	ctx context.Context,
+	message notifications.EmailMessage,
+) result.Result[notifications.EmailSendReceipt] {
+	sender.body = message.Body().String()
+
+	return result.Ok(notifications.NewEmailSendReceipt("<e2e-email@example.test>"))
+}
+
 func assertTelegramDelivered(t *testing.T, ctx context.Context, databaseURL string) {
 	t.Helper()
 
@@ -1659,6 +2306,151 @@ where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
 	}
 }
 
+func assertEmailDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerMessageID string
+	var attempts int
+	query := `
+select ni.status, ni.provider_message_id, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'email'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerMessageID, &attempts)
+	if scanErr != nil {
+		t.Fatalf("email intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerMessageID != "<e2e-email@example.test>" || attempts != 1 {
+		t.Fatalf("unexpected email intent: %s %s %d", status, providerMessageID, attempts)
+	}
+}
+
+func assertDiscordDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerStatusCode int
+	var attempts int
+	query := `
+select ni.status, ni.provider_status_code, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'discord'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerStatusCode, &attempts)
+	if scanErr != nil {
+		t.Fatalf("discord intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerStatusCode != http.StatusNoContent || attempts != 1 {
+		t.Fatalf("unexpected discord intent: %s %d %d", status, providerStatusCode, attempts)
+	}
+}
+
+func assertGoogleChatDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerStatusCode int
+	var attempts int
+	query := `
+select ni.status, ni.provider_status_code, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'google_chat'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerStatusCode, &attempts)
+	if scanErr != nil {
+		t.Fatalf("google chat intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerStatusCode != http.StatusOK || attempts != 1 {
+		t.Fatalf("unexpected google chat intent: %s %d %d", status, providerStatusCode, attempts)
+	}
+}
+
+func assertNtfyDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerStatusCode int
+	var attempts int
+	query := `
+select ni.status, ni.provider_status_code, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'ntfy'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerStatusCode, &attempts)
+	if scanErr != nil {
+		t.Fatalf("ntfy intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerStatusCode != http.StatusOK || attempts != 1 {
+		t.Fatalf("unexpected ntfy intent: %s %d %d", status, providerStatusCode, attempts)
+	}
+}
+
+func assertTeamsDelivered(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	var status string
+	var providerStatusCode int
+	var attempts int
+	query := `
+select ni.status, ni.provider_status_code, ni.attempts
+from notification_intents ni
+join events e on e.id = ni.event_id
+where e.event_id = '980e8400-e29b-41d4-a716-446655440000'
+  and ni.provider = 'microsoft_teams'
+`
+	scanErr := pool.QueryRow(ctx, query).Scan(&status, &providerStatusCode, &attempts)
+	if scanErr != nil {
+		t.Fatalf("microsoft teams intent: %v", scanErr)
+	}
+
+	if status != "delivered" || providerStatusCode != http.StatusOK || attempts != 1 {
+		t.Fatalf("unexpected microsoft teams intent: %s %d %d", status, providerStatusCode, attempts)
+	}
+}
+
 func assertDeliveryJournal(t *testing.T, client *http.Client, baseURL string) {
 	t.Helper()
 
@@ -1667,7 +2459,7 @@ func assertDeliveryJournal(t *testing.T, client *http.Client, baseURL string) {
 		t.Fatalf("expected notification settings ok, got %d", settings.StatusCode)
 	}
 
-	for _, expected := range []string{"Delivery journal", "telegram", "webhook", "delivered", "204"} {
+	for _, expected := range []string{"Delivery journal", "telegram", "webhook", "email", "discord", "google_chat", "ntfy", "microsoft_teams", "delivered", "204"} {
 		if !strings.Contains(settings.Body, expected) {
 			t.Fatalf("expected delivery journal to contain %q: %s", expected, settings.Body)
 		}
@@ -1737,6 +2529,11 @@ func assertProjectMemberRoleGate(
 	projects := request(t, client, http.MethodGet, baseURL+"/projects", "", nil)
 	if projects.StatusCode != http.StatusOK {
 		t.Fatalf("expected project member project read ok, got %d: %s", projects.StatusCode, projects.Body)
+	}
+
+	stats := request(t, client, http.MethodGet, baseURL+"/stats", "", nil)
+	if stats.StatusCode != http.StatusOK {
+		t.Fatalf("expected project member stats read ok, got %d: %s", stats.StatusCode, stats.Body)
 	}
 
 	environments := request(t, client, http.MethodGet, baseURL+"/environments", "", nil)
@@ -1951,6 +2748,125 @@ func newWebhookFixtureServer(t *testing.T) (*httptest.Server, string) {
 	}
 
 	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port() + "/hook"
+}
+
+func newDiscordFixtureServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/discord" {
+			t.Fatalf("unexpected discord path: %s", r.URL.Path)
+		}
+
+		var payload map[string]any
+		decodeErr := json.NewDecoder(r.Body).Decode(&payload)
+		if decodeErr != nil {
+			t.Fatalf("decode discord payload: %v", decodeErr)
+		}
+
+		if payload["embeds"] == nil {
+			t.Fatalf("unexpected discord payload: %#v", payload)
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("parse discord server url: %v", parseErr)
+	}
+
+	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port() + "/discord"
+}
+
+func newGoogleChatFixtureServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat" {
+			t.Fatalf("unexpected google chat path: %s", r.URL.Path)
+		}
+
+		var payload map[string]any
+		decodeErr := json.NewDecoder(r.Body).Decode(&payload)
+		if decodeErr != nil {
+			t.Fatalf("decode google chat payload: %v", decodeErr)
+		}
+
+		if payload["cardsV2"] == nil {
+			t.Fatalf("unexpected google chat payload: %#v", payload)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("parse google chat server url: %v", parseErr)
+	}
+
+	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port() + "/chat"
+}
+
+func newNtfyFixtureServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ops-alerts" {
+			t.Fatalf("unexpected ntfy path: %s", r.URL.Path)
+		}
+
+		if r.Header.Get("Title") == "" || r.Header.Get("Click") == "" {
+			t.Fatalf("unexpected ntfy headers: title=%q click=%q", r.Header.Get("Title"), r.Header.Get("Click"))
+		}
+
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Fatalf("read ntfy body: %v", readErr)
+		}
+
+		if !strings.Contains(string(body), "New issue") || !strings.Contains(string(body), "Event:") {
+			t.Fatalf("unexpected ntfy body: %s", string(body))
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("parse ntfy server url: %v", parseErr)
+	}
+
+	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port()
+}
+
+func newTeamsFixtureServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/teams" {
+			t.Fatalf("unexpected microsoft teams path: %s", r.URL.Path)
+		}
+
+		var payload map[string]any
+		decodeErr := json.NewDecoder(r.Body).Decode(&payload)
+		if decodeErr != nil {
+			t.Fatalf("decode microsoft teams payload: %v", decodeErr)
+		}
+
+		if payload["attachments"] == nil {
+			t.Fatalf("unexpected microsoft teams payload: %#v", payload)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatalf("parse microsoft teams server url: %v", parseErr)
+	}
+
+	return server, parsed.Scheme + "://hooks.example.test:" + parsed.Port() + "/teams"
 }
 
 type e2eResolver map[string][]netip.Addr

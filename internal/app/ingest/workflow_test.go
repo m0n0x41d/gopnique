@@ -76,6 +76,33 @@ func TestIngestCanonicalEventDoesNotApplyIssuePlanForDuplicate(t *testing.T) {
 	}
 }
 
+func TestIngestCanonicalEventRejectsQuotaBeforePersistence(t *testing.T) {
+	ports := &fakePorts{
+		quota:   NewQuotaRejected("project_quota_exceeded"),
+		issueID: issueID(t),
+	}
+	transaction := fakeTransaction{ports: ports}
+	command := NewIngestCommand(issueEvent(t))
+
+	receiptResult := IngestCanonicalEvent(context.Background(), command, transaction)
+	receipt, receiptErr := receiptResult.Value()
+	if receiptErr != nil {
+		t.Fatalf("ingest receipt: %v", receiptErr)
+	}
+
+	if receipt.Kind() != ReceiptQuotaRejected {
+		t.Fatalf("unexpected receipt kind: %s", receipt.Kind())
+	}
+
+	if receipt.Reason() != "project_quota_exceeded" {
+		t.Fatalf("unexpected quota reason: %s", receipt.Reason())
+	}
+
+	if ports.appended || ports.applied || ports.enqueued {
+		t.Fatalf("quota rejection must not persist: %#v", ports)
+	}
+}
+
 func TestIngestCanonicalEventKeepsTransactionOutOfIssueIndex(t *testing.T) {
 	ports := &fakePorts{
 		issueID:      issueID(t),
@@ -153,6 +180,7 @@ type fakePorts struct {
 	enqueued        bool
 	issueID         domain.IssueID
 	issueCreated    bool
+	quota           QuotaDecision
 }
 
 func (ports *fakePorts) Exists(
@@ -174,6 +202,17 @@ func (ports *fakePorts) Append(
 	}
 
 	return result.Ok(NewAppendedEvent())
+}
+
+func (ports *fakePorts) CheckQuota(
+	ctx context.Context,
+	event domain.CanonicalEvent,
+) result.Result[QuotaDecision] {
+	if ports.quota.Reason() != "" {
+		return result.Ok(ports.quota)
+	}
+
+	return result.Ok(NewQuotaAllowed())
 }
 
 func (ports *fakePorts) Apply(

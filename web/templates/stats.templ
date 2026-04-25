@@ -1,0 +1,98 @@
+package templates
+
+import (
+	"fmt"
+
+	statsapp "github.com/ivanzakutnii/error-tracker/internal/app/stats"
+)
+
+templ ProjectStatsPage(view statsapp.View) {
+	@Layout("Stats", "stats") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Project telemetry</div>
+					<h1 class="h-1">Stats</h1>
+					<div class="page__sub">Bounded event and issue counts from hourly project aggregates.</div>
+				</div>
+				<div class="row gap-2">
+					<a class={ statsPeriodClass(view.Period, "24h") } href="/stats?period=24h">24h</a>
+					<a class={ statsPeriodClass(view.Period, "14d") } href="/stats?period=14d">14d</a>
+				</div>
+			</section>
+			<section class="metric-grid">
+				<div class="kpi">
+					<div class="eyebrow">Events</div>
+					<div class="kpi__num">{ fmt.Sprint(view.TotalEvents) }<span class="unit">{ view.Period }</span></div>
+					<div class="kpi__delta">issue { fmt.Sprint(view.IssueEvents) } · transaction { fmt.Sprint(view.TransactionEvents) }</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Open Issues</div>
+					<div class="kpi__num">{ fmt.Sprint(view.UnresolvedIssues) }<span class="unit">unresolved</span></div>
+					<div class="kpi__delta">resolved { fmt.Sprint(view.ResolvedIssues) } · ignored { fmt.Sprint(view.IgnoredIssues) }</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Feedback</div>
+					<div class="kpi__num">{ fmt.Sprint(view.UserReports) }<span class="unit">reports</span></div>
+					<div class="kpi__delta">attached to scoped events</div>
+				</div>
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Trend by { view.Granularity }</span>
+					<span class="chip">{ statsBucketCountLabel(view) }</span>
+				</div>
+				<div class="table-wrap table-wrap--embedded">
+					<table class="small-table">
+						<thead>
+							<tr>
+								<th>Bucket</th>
+								<th>Events</th>
+								<th>Issue events</th>
+								<th>Transactions</th>
+								<th>Trend</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, bucket := range view.Buckets {
+								<tr>
+									<td class="mono">{ bucket.Label }</td>
+									<td class="mono">{ fmt.Sprint(bucket.EventCount) }</td>
+									<td class="mono">{ fmt.Sprint(bucket.IssueEvents) }</td>
+									<td class="mono">{ fmt.Sprint(bucket.TransactionEvents) }</td>
+									<td>
+										<progress class="mini-meter" value={ fmt.Sprint(bucket.EventCount) } max={ statsMeterMax(view) }></progress>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func statsPeriodClass(active string, period string) string {
+	if active == period {
+		return "chip-filter is-active"
+	}
+
+	return "chip-filter"
+}
+
+func statsBucketCountLabel(view statsapp.View) string {
+	if len(view.Buckets) == 1 {
+		return "1 bucket"
+	}
+
+	return fmt.Sprintf("%d buckets", len(view.Buckets))
+}
+
+func statsMeterMax(view statsapp.View) string {
+	if view.MaxBucketEvents < 1 {
+		return "1"
+	}
+
+	return fmt.Sprint(view.MaxBucketEvents)
+}

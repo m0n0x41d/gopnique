@@ -51,11 +51,12 @@ func TestSentrySDKFixtureReplay(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 16 {
-		t.Fatalf("expected 16 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 25 {
+		t.Fatalf("expected 25 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	handler := httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,

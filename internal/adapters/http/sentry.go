@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/sentryprotocol"
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
+	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
@@ -28,6 +30,7 @@ var sentryKeyPattern = regexp.MustCompile(`(?:^|[\s,])(sentry_key|glitchtip_key)
 type SentryIngestBackend interface {
 	ingest.ProjectDirectory
 	ingest.IngestTransaction
+	ratelimitapp.Checker
 	userreportapp.Writer
 }
 
@@ -59,6 +62,12 @@ func sentryStoreHandler(backend SentryIngestBackend) http.HandlerFunc {
 func sentryEnvelopeHandler(backend SentryIngestBackend) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		handleSentryIngestCarrier(w, r, backend, sentryEnvelopeRequest)
+	}
+}
+
+func sentrySecurityHandler(backend SentryIngestBackend) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		handleSentrySecurityCarrier(w, r, backend)
 	}
 }
 
@@ -136,6 +145,18 @@ func handleSentryIngestCarrier(
 		return
 	}
 
+	rateLimitResult := checkSentryRateLimit(r.Context(), backend, auth, carrier, receivedAt)
+	rateLimit, rateLimitErr := rateLimitResult.Value()
+	if rateLimitErr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "rate_limit_unavailable"})
+		return
+	}
+
+	if !rateLimit.Allowed() {
+		writeRateLimitDecision(w, rateLimit)
+		return
+	}
+
 	receiptResult := ingest.IngestCanonicalEvent(r.Context(), ingest.NewIngestCommand(parsed.event), backend)
 	receipt, receiptErr := receiptResult.Value()
 	if receiptErr != nil {
@@ -143,9 +164,85 @@ func handleSentryIngestCarrier(
 		return
 	}
 
+	if receipt.Kind() == ingest.ReceiptQuotaRejected {
+		writeIngestReceipt(w, receipt)
+		return
+	}
+
 	reportErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
 	if reportErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
+		return
+	}
+
+	writeIngestReceipt(w, receipt)
+}
+
+func handleSentrySecurityCarrier(
+	w http.ResponseWriter,
+	r *http.Request,
+	backend SentryIngestBackend,
+) {
+	if backend == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "ingest_backend_not_configured"})
+		return
+	}
+
+	bodyResult := readSentryBody(w, r, sentryStoreRequest)
+	body, bodyErr := bodyResult.Value()
+	if bodyErr != nil {
+		writeJSON(w, httpStatusForBodyError(bodyErr), map[string]string{"detail": bodyErr.Error()})
+		return
+	}
+
+	carrierResult := decodeSentryAuthCarrier(r, nil, sentryStoreRequest)
+	carrier, authErr := carrierResult.Value()
+	if authErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	authResult := resolveProjectAuth(r, backend, carrier)
+	auth, projectErr := authResult.Value()
+	if projectErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	receivedAt, receivedErr := domain.NewTimePoint(time.Now().UTC())
+	if receivedErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "clock_error"})
+		return
+	}
+
+	project := sentryprotocol.NewProjectContextWithPrivacy(
+		auth.OrganizationID(),
+		auth.ProjectID(),
+		auth.ScrubIPAddresses(),
+	)
+	eventResult := sentryprotocol.ParseCSPReport(project, receivedAt, body)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		writeProtocolError(w, eventErr)
+		return
+	}
+
+	rateLimitResult := checkSentryRateLimit(r.Context(), backend, auth, carrier, receivedAt)
+	rateLimit, rateLimitErr := rateLimitResult.Value()
+	if rateLimitErr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "rate_limit_unavailable"})
+		return
+	}
+
+	if !rateLimit.Allowed() {
+		writeRateLimitDecision(w, rateLimit)
+		return
+	}
+
+	receiptResult := ingest.IngestCanonicalEvent(r.Context(), ingest.NewIngestCommand(event), backend)
+	receipt, receiptErr := receiptResult.Value()
+	if receiptErr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "storage_unavailable"})
 		return
 	}
 
@@ -446,6 +543,32 @@ func resolveProjectAuth(
 	return backend.ResolveProjectKey(r.Context(), ref, key)
 }
 
+func checkSentryRateLimit(
+	ctx context.Context,
+	checker ratelimitapp.Checker,
+	auth domain.ProjectAuth,
+	carrier sentryAuthCarrier,
+	receivedAt domain.TimePoint,
+) result.Result[ratelimitapp.Decision] {
+	publicKey, keyErr := domain.NewProjectPublicKey(carrier.publicKey)
+	if keyErr != nil {
+		return result.Err[ratelimitapp.Decision](keyErr)
+	}
+
+	return ratelimitapp.Check(
+		ctx,
+		checker,
+		ratelimitapp.Command{
+			Scope: ratelimitapp.Scope{
+				OrganizationID: auth.OrganizationID(),
+				ProjectID:      auth.ProjectID(),
+			},
+			PublicKey: publicKey,
+			Now:       receivedAt.Time(),
+		},
+	)
+}
+
 func parseSentryRequest(
 	project sentryprotocol.ProjectContext,
 	receivedAt domain.TimePoint,
@@ -575,6 +698,15 @@ func writeProtocolError(w http.ResponseWriter, err error) {
 }
 
 func writeIngestReceipt(w http.ResponseWriter, receipt ingest.IngestReceipt) {
+	if receipt.Kind() == ingest.ReceiptQuotaRejected {
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"detail": receipt.Reason(),
+			"id":     receipt.EventID().Hex(),
+		})
+		return
+	}
+
 	body := map[string]any{
 		"id": receipt.EventID().Hex(),
 	}
@@ -584,6 +716,22 @@ func writeIngestReceipt(w http.ResponseWriter, receipt ingest.IngestReceipt) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+func writeRateLimitDecision(w http.ResponseWriter, decision ratelimitapp.Decision) {
+	w.Header().Set("Retry-After", retryAfterSeconds(decision.RetryAfter()))
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{
+		"detail": decision.Reason(),
+	})
+}
+
+func retryAfterSeconds(duration time.Duration) string {
+	seconds := int(duration.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+
+	return strconv.Itoa(seconds)
 }
 
 type deniedError struct{}

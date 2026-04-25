@@ -11,8 +11,13 @@ type AlertActionProvider string
 const (
 	AlertTriggerIssueOpened AlertTrigger = "issue_opened"
 
-	AlertActionProviderTelegram AlertActionProvider = "telegram"
-	AlertActionProviderWebhook  AlertActionProvider = "webhook"
+	AlertActionProviderTelegram   AlertActionProvider = "telegram"
+	AlertActionProviderWebhook    AlertActionProvider = "webhook"
+	AlertActionProviderEmail      AlertActionProvider = "email"
+	AlertActionProviderDiscord    AlertActionProvider = "discord"
+	AlertActionProviderGoogleChat AlertActionProvider = "google_chat"
+	AlertActionProviderNtfy       AlertActionProvider = "ntfy"
+	AlertActionProviderTeams      AlertActionProvider = "microsoft_teams"
 )
 
 type AlertRuleName struct {
@@ -34,7 +39,12 @@ func (trigger AlertTrigger) Valid() bool {
 
 func (provider AlertActionProvider) Valid() bool {
 	return provider == AlertActionProviderTelegram ||
-		provider == AlertActionProviderWebhook
+		provider == AlertActionProviderWebhook ||
+		provider == AlertActionProviderEmail ||
+		provider == AlertActionProviderDiscord ||
+		provider == AlertActionProviderGoogleChat ||
+		provider == AlertActionProviderNtfy ||
+		provider == AlertActionProviderTeams
 }
 
 func (trigger AlertTrigger) String() string {

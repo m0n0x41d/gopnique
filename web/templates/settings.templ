@@ -82,6 +82,135 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 					</form>
 				</div>
 			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Email destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/email-destinations"
+						class="form"
+						hx-post="/settings/notifications/email-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Email</span>
+							<input class="input--mono" name="address" type="email" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save email</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Discord destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/discord-destinations"
+						class="form"
+						hx-post="/settings/notifications/discord-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Webhook URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save Discord</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Google Chat destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/google-chat-destinations"
+						class="form"
+						hx-post="/settings/notifications/google-chat-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Webhook URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save Google Chat</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">ntfy destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/ntfy-destinations"
+						class="form"
+						hx-post="/settings/notifications/ntfy-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Server URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Topic</span>
+							<input class="input--mono" name="topic" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save ntfy</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Microsoft Teams destination</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/settings/notifications/teams-destinations"
+						class="form"
+						hx-post="/settings/notifications/teams-destinations"
+						hx-target="#notification-settings"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Label</span>
+							<input name="label" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Webhook URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save Teams</button>
+					</form>
+				</div>
+			</div>
 		</section>
 		<section class="detail-grid">
 			<div class="card">
@@ -112,6 +241,21 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 								}
 								for _, destination := range view.WebhookDestinations {
 									<option value={ destinationOptionValue("webhook", destination.ID) }>{ destination.Label } · webhook</option>
+								}
+								for _, destination := range view.EmailDestinations {
+									<option value={ destinationOptionValue("email", destination.ID) }>{ destination.Label } · email</option>
+								}
+								for _, destination := range view.DiscordDestinations {
+									<option value={ destinationOptionValue("discord", destination.ID) }>{ destination.Label } · discord</option>
+								}
+								for _, destination := range view.GoogleChatDestinations {
+									<option value={ destinationOptionValue("google_chat", destination.ID) }>{ destination.Label } · Google Chat</option>
+								}
+								for _, destination := range view.NtfyDestinations {
+									<option value={ destinationOptionValue("ntfy", destination.ID) }>{ destination.Label } · ntfy</option>
+								}
+								for _, destination := range view.TeamsDestinations {
+									<option value={ destinationOptionValue("microsoft_teams", destination.ID) }>{ destination.Label } · Microsoft Teams</option>
 								}
 							</select>
 						</label>
@@ -191,6 +335,168 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 			</div>
 			<div class="card">
 				<div class="card__head">
+					<span class="eyebrow">Email</span>
+					<span class="chip">{ emailDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.EmailDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>Email</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.EmailDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.Address }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Discord</span>
+					<span class="chip">{ discordDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.DiscordDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.DiscordDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Google Chat</span>
+					<span class="chip">{ googleChatDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.GoogleChatDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.GoogleChatDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">ntfy</span>
+					<span class="chip">{ ntfyDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.NtfyDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Topic</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.NtfyDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td class="mono">{ destination.Topic }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Microsoft Teams</span>
+					<span class="chip">{ teamsDestinationCountLabel(view) }</span>
+				</div>
+				if len(view.TeamsDestinations) == 0 {
+					<div class="card__body">
+						<p class="t-mute">None</p>
+					</div>
+				} else {
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Label</th>
+									<th>URL</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, destination := range view.TeamsDestinations {
+									<tr>
+										<td>{ destination.Label }</td>
+										<td class="mono">{ destination.URL }</td>
+										<td><span class={ statusChipClass(destination.Status) }>{ destination.Status }</span></td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			<div class="card">
+				<div class="card__head">
 					<span class="eyebrow">Rules</span>
 					<span class="chip">{ alertCountLabel(view) }</span>
 				</div>
@@ -222,6 +528,86 @@ templ NotificationSettingsPanel(view settingsapp.ProjectSettingsView, message No
 						</table>
 					</div>
 				}
+			</div>
+		</section>
+		<section>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Data retention</span>
+					<span class={ statusChipClass(view.RetentionPolicy.Status) }>{ view.RetentionPolicy.Status }</span>
+				</div>
+				<div class="card__body">
+					<div class="metric-grid metric-grid--tight">
+						<div class="kpi">
+							<div class="eyebrow">Events</div>
+							<div class="kpi__num">{ retentionDaysText(view.RetentionPolicy.EventRetentionDays) }</div>
+							<div class="kpi__delta">metadata and issue events</div>
+						</div>
+						<div class="kpi">
+							<div class="eyebrow">Payloads</div>
+							<div class="kpi__num">{ retentionDaysText(view.RetentionPolicy.PayloadRetentionDays) }</div>
+							<div class="kpi__delta">canonical display payload</div>
+						</div>
+						<div class="kpi">
+							<div class="eyebrow">Deliveries</div>
+							<div class="kpi__num">{ retentionDaysText(view.RetentionPolicy.DeliveryRetentionDays) }</div>
+							<div class="kpi__delta">notification journal</div>
+						</div>
+						<div class="kpi">
+							<div class="eyebrow">Reports</div>
+							<div class="kpi__num">{ retentionDaysText(view.RetentionPolicy.UserReportRetentionDays) }</div>
+							<div class="kpi__delta">user feedback</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<section>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Quota policy</span>
+					<span class="chip">daily events</span>
+				</div>
+				<div class="card__body">
+					<div class="metric-grid metric-grid--tight">
+						<div class="kpi">
+							<div class="eyebrow">Organization</div>
+							<div class="kpi__num">{ quotaLimitText(view.QuotaPolicy.OrganizationDailyLimit) }</div>
+							<div class="kpi__delta">
+								<span class={ statusChipClass(quotaStatusText(view.QuotaPolicy.OrganizationEnabled)) }>{ quotaStatusText(view.QuotaPolicy.OrganizationEnabled) }</span>
+							</div>
+						</div>
+						<div class="kpi">
+							<div class="eyebrow">Project</div>
+							<div class="kpi__num">{ quotaLimitText(view.QuotaPolicy.ProjectDailyLimit) }</div>
+							<div class="kpi__delta">
+								<span class={ statusChipClass(quotaStatusText(view.QuotaPolicy.ProjectEnabled)) }>{ quotaStatusText(view.QuotaPolicy.ProjectEnabled) }</span>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		<section>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Rate limit</span>
+					<span class={ statusChipClass(quotaStatusText(view.RateLimitPolicy.Enabled)) }>{ quotaStatusText(view.RateLimitPolicy.Enabled) }</span>
+				</div>
+				<div class="card__body">
+					<div class="metric-grid metric-grid--tight">
+						<div class="kpi">
+							<div class="eyebrow">Project key</div>
+							<div class="kpi__num">{ rateLimitPerMinuteText(view.RateLimitPolicy.RequestsPerMin) }</div>
+							<div class="kpi__delta">{ rateLimitWindowText(view.RateLimitPolicy.EventLimit, view.RateLimitPolicy.WindowSeconds) }</div>
+						</div>
+						<div class="kpi">
+							<div class="eyebrow">Public key</div>
+							<div class="kpi__num kpi__num--small">{ shortKeyText(view.RateLimitPolicy.PublicKey) }</div>
+							<div class="kpi__delta">active ingest key</div>
+						</div>
+					</div>
+				</div>
 			</div>
 		</section>
 		<section>
@@ -303,7 +689,7 @@ func destinationOptionValue(provider string, id string) string {
 }
 
 func destinationCount(view settingsapp.ProjectSettingsView) int {
-	return len(view.TelegramDestinations) + len(view.WebhookDestinations)
+	return len(view.TelegramDestinations) + len(view.WebhookDestinations) + len(view.EmailDestinations) + len(view.DiscordDestinations) + len(view.GoogleChatDestinations) + len(view.NtfyDestinations) + len(view.TeamsDestinations)
 }
 
 func telegramDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
@@ -316,6 +702,46 @@ func telegramDestinationCountLabel(view settingsapp.ProjectSettingsView) string 
 
 func webhookDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
 	if len(view.WebhookDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func emailDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.EmailDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func discordDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.DiscordDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func googleChatDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.GoogleChatDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func ntfyDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.NtfyDestinations) == 1 {
+		return "1 destination"
+	}
+
+	return "destinations"
+}
+
+func teamsDestinationCountLabel(view settingsapp.ProjectSettingsView) string {
+	if len(view.TeamsDestinations) == 1 {
 		return "1 destination"
 	}
 
@@ -340,6 +766,50 @@ func deliveryCountLabel(view settingsapp.ProjectSettingsView) string {
 
 func deliveryAttemptText(delivery settingsapp.DeliveryIntentView) string {
 	return fmt.Sprintf("%d", delivery.Attempts)
+}
+
+func retentionDaysText(days int) string {
+	return fmt.Sprintf("%dd", days)
+}
+
+func quotaLimitText(limit int) string {
+	if limit <= 0 {
+		return "off"
+	}
+
+	return fmt.Sprintf("%d", limit)
+}
+
+func quotaStatusText(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+
+	return "disabled"
+}
+
+func rateLimitPerMinuteText(limit int) string {
+	if limit <= 0 {
+		return "off"
+	}
+
+	return fmt.Sprintf("%d/min", limit)
+}
+
+func rateLimitWindowText(limit int, seconds int) string {
+	if limit <= 0 || seconds <= 0 {
+		return "not enforced"
+	}
+
+	return fmt.Sprintf("%d requests / %ds", limit, seconds)
+}
+
+func shortKeyText(publicKey string) string {
+	if len(publicKey) <= 8 {
+		return publicKey
+	}
+
+	return publicKey[:8]
 }
 
 func alertStatusAction(alert settingsapp.IssueOpenedAlertView) string {

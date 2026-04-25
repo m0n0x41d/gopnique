@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -30,7 +31,12 @@ type Config struct {
 	MigrationsDir         string
 	TelegramBotToken      string
 	TelegramAPIBaseURL    string
+	SMTPAddr              string
+	SMTPUsername          string
+	SMTPPassword          string
+	SMTPFrom              string
 	NotificationBatchSize int
+	RetentionBatchSize    int
 }
 
 func Load(env []string, mode Mode) (Config, error) {
@@ -45,6 +51,11 @@ func Load(env []string, mode Mode) (Config, error) {
 		return Config{}, notificationBatchSizeErr
 	}
 
+	retentionBatchSize, retentionBatchSizeErr := intValueOr(values, "RETENTION_BATCH_SIZE", 500)
+	if retentionBatchSizeErr != nil {
+		return Config{}, retentionBatchSizeErr
+	}
+
 	cfg := Config{
 		AppMode:               mode,
 		PublicURL:             values["PUBLIC_URL"],
@@ -56,7 +67,12 @@ func Load(env []string, mode Mode) (Config, error) {
 		MigrationsDir:         valueOr(values, "MIGRATIONS_DIR", "migrations"),
 		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
 		TelegramAPIBaseURL:    valueOr(values, "TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
+		SMTPAddr:              strings.TrimSpace(values["SMTP_ADDR"]),
+		SMTPUsername:          strings.TrimSpace(values["SMTP_USERNAME"]),
+		SMTPPassword:          values["SMTP_PASSWORD"],
+		SMTPFrom:              strings.TrimSpace(values["SMTP_FROM"]),
 		NotificationBatchSize: notificationBatchSize,
+		RetentionBatchSize:    retentionBatchSize,
 	}
 
 	err := validate(cfg)
@@ -149,6 +165,10 @@ func validate(cfg Config) error {
 		return errors.New("NOTIFICATION_BATCH_SIZE must be positive")
 	}
 
+	if cfg.RetentionBatchSize < 1 {
+		return errors.New("RETENTION_BATCH_SIZE must be positive")
+	}
+
 	if strings.TrimSpace(cfg.MigrationsDir) == "" {
 		return errors.New("MIGRATIONS_DIR is required")
 	}
@@ -156,6 +176,11 @@ func validate(cfg Config) error {
 	telegramURLErr := validateHTTPURL("TELEGRAM_API_BASE_URL", cfg.TelegramAPIBaseURL)
 	if telegramURLErr != nil {
 		return telegramURLErr
+	}
+
+	smtpErr := validateSMTP(cfg)
+	if smtpErr != nil {
+		return smtpErr
 	}
 
 	return nil
@@ -178,6 +203,10 @@ func (cfg Config) requiresPublicURL() bool {
 func (cfg Config) requiresSecretKey() bool {
 	return cfg.AppMode == ModeServer ||
 		cfg.AppMode == ModeAllInOne
+}
+
+func (cfg Config) SMTPEnabled() bool {
+	return cfg.SMTPAddr != ""
 }
 
 func validateDatabaseURL(input string) error {
@@ -235,6 +264,36 @@ func validateHTTPAddr(input string) error {
 
 	if parsedPort < 1 || parsedPort > 65535 {
 		return errors.New("HTTP_ADDR port must be between 1 and 65535")
+	}
+
+	return nil
+}
+
+func validateSMTP(cfg Config) error {
+	if cfg.SMTPAddr == "" && cfg.SMTPFrom == "" && cfg.SMTPUsername == "" && cfg.SMTPPassword == "" {
+		return nil
+	}
+
+	if cfg.SMTPAddr == "" {
+		return errors.New("SMTP_ADDR is required when SMTP is configured")
+	}
+
+	_, _, splitErr := net.SplitHostPort(cfg.SMTPAddr)
+	if splitErr != nil {
+		return errors.New("SMTP_ADDR must be host:port")
+	}
+
+	if cfg.SMTPFrom == "" {
+		return errors.New("SMTP_FROM is required when SMTP is configured")
+	}
+
+	parsedFrom, fromErr := mail.ParseAddress(cfg.SMTPFrom)
+	if fromErr != nil || parsedFrom.Address != cfg.SMTPFrom {
+		return errors.New("SMTP_FROM must be an email address")
+	}
+
+	if cfg.SMTPUsername == "" && cfg.SMTPPassword != "" {
+		return errors.New("SMTP_USERNAME is required when SMTP_PASSWORD is set")
 	}
 
 	return nil
