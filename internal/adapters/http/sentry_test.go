@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
+	logapp "github.com/ivanzakutnii/error-tracker/internal/app/logs"
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
 	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
@@ -146,6 +148,33 @@ func TestSentryStoreRouteMapsRateLimitTo429(t *testing.T) {
 	}
 }
 
+func TestSentryEnvelopeRoutePersistsLogRecords(t *testing.T) {
+	payload := `{"items":[{"timestamp":"2026-04-24T10:00:00Z","level":"error","body":"checkout failed","logger":"web"}]}`
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"log","length":` + strconv.Itoa(len(payload)) + `}`,
+		payload,
+	}, "\n")
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/42/envelope/?sentry_key=550e8400e29b41d4a716446655440000",
+		strings.NewReader(envelope),
+	)
+	response := httptest.NewRecorder()
+	backend := newFakeSentryBackend(t)
+	mux := newMux(nil, backend, backend, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, backend, IngestEnrichments{}, NewSessionCodec("test-secret"), AuthSettings{PublicURL: "http://example.test"})
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", response.Code, response.Body.String())
+	}
+
+	if !strings.Contains(response.Body.String(), `"accepted":1`) {
+		t.Fatalf("unexpected body: %s", response.Body.String())
+	}
+}
+
 func TestDecodeSentryAuthCarrierReadsHeaderAuth(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -255,6 +284,15 @@ func (backend fakeSentryBackend) Run(
 		issueID: backend.issueID,
 		quota:   backend.quota,
 	}
+
+	return program(ctx, ports)
+}
+
+func (backend fakeSentryBackend) RunLogIngest(
+	ctx context.Context,
+	program logapp.IngestProgram,
+) result.Result[logapp.IngestTransactionResult] {
+	ports := fakeSentryLogPorts{}
 
 	return program(ctx, ports)
 }
@@ -429,6 +467,23 @@ func (ports fakeSentryPorts) EnqueueIssueOpened(
 	change ingest.IssueChange,
 ) result.Result[ingest.IssueOpenedEnqueueResult] {
 	return result.Ok(ingest.NewIssueOpenedEnqueueResult(0))
+}
+
+type fakeSentryLogPorts struct{}
+
+func (ports fakeSentryLogPorts) CheckLogQuota(
+	ctx context.Context,
+	record domain.LogRecord,
+	count int,
+) result.Result[logapp.QuotaDecision] {
+	return result.Ok(logapp.NewQuotaAllowed())
+}
+
+func (ports fakeSentryLogPorts) AppendLogRecords(
+	ctx context.Context,
+	records []domain.LogRecord,
+) result.Result[logapp.AppendResult] {
+	return result.Ok(logapp.NewAppendResult(len(records)))
 }
 
 func mustDomainID[T any](t *testing.T, constructor func(string) (T, error), input string) T {

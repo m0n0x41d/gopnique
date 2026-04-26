@@ -1,0 +1,209 @@
+package templates
+
+import (
+	"fmt"
+
+	logapp "github.com/ivanzakutnii/error-tracker/internal/app/logs"
+)
+
+templ LogList(view logapp.ListView) {
+	@Layout("Logs", "logs") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Logs</div>
+					<h1 class="h-1">Log records</h1>
+					<div class="page__sub">Project-scoped log telemetry from supported Sentry and OTel inputs.</div>
+				</div>
+				<a class="btn" href="/performance">Performance</a>
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Filters</span>
+					<span class="chip">{ logCountLabel(view) }</span>
+				</div>
+				<form class="form" method="get" action="/logs">
+					<label>
+						<span>Severity</span>
+						<input class="input" name="severity" value={ view.Filters.Severity } placeholder="error"/>
+					</label>
+					<label>
+						<span>Logger</span>
+						<input class="input" name="logger" value={ view.Filters.Logger } placeholder="checkout.logger"/>
+					</label>
+					<label>
+						<span>Environment</span>
+						<input class="input" name="environment" value={ view.Filters.Environment } placeholder="production"/>
+					</label>
+					<label>
+						<span>Release</span>
+						<input class="input" name="release" value={ view.Filters.Release } placeholder="api@1.2.3"/>
+					</label>
+					<label>
+						<span>Resource key</span>
+						<input class="input" name="resource_key" value={ view.Filters.ResourceKey } placeholder="service.name"/>
+					</label>
+					<label>
+						<span>Resource value</span>
+						<input class="input" name="resource_value" value={ view.Filters.ResourceValue } placeholder="checkout"/>
+					</label>
+					<label>
+						<span>Attribute key</span>
+						<input class="input" name="attribute_key" value={ view.Filters.AttributeKey } placeholder="http.route"/>
+					</label>
+					<label>
+						<span>Attribute value</span>
+						<input class="input" name="attribute_value" value={ view.Filters.AttributeValue } placeholder="/checkout"/>
+					</label>
+					<button class="btn btn--primary" type="submit">Apply</button>
+				</form>
+			</section>
+			if len(view.Logs) == 0 {
+				<section class="empty card">
+					<div class="eyebrow">No logs</div>
+					<h2 class="h-2">Accepted log records will appear here.</h2>
+					<p>Logs are telemetry records and do not create issues.</p>
+				</section>
+			} else {
+				<section class="card">
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Time</th>
+									<th>Severity</th>
+									<th>Message</th>
+									<th>Logger</th>
+									<th>Environment</th>
+									<th>Release</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, record := range view.Logs {
+									<tr>
+										<td class="mono">{ record.Timestamp }</td>
+										<td><span class={ logSeverityClass(record.Severity) }>{ record.Severity }</span></td>
+										<td class="break"><a href={ templ.URL("/logs/" + record.ID) }>{ record.Body }</a></td>
+										<td class="mono break">{ fallback(record.Logger) }</td>
+										<td>{ fallback(record.Environment) }</td>
+										<td class="mono break">{ fallback(record.Release) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ LogDetail(view logapp.DetailView) {
+	@Layout("Log", "logs") {
+		<div class="page">
+			<section class="detail-head">
+				<div class="row gap-2">
+					<a href="/logs" class="btn btn--ghost btn--sm">All logs</a>
+				</div>
+				<h1>{ view.Record.Body }</h1>
+				<div class="detail-head__meta">
+					<span class={ logSeverityClass(view.Record.Severity) }>{ view.Record.Severity }</span>
+					<span class="mono">{ view.Record.Timestamp }</span>
+					<span class="mono">received { view.Record.ReceivedAt }</span>
+				</div>
+			</section>
+			<section class="metric-grid">
+				<div class="kpi">
+					<div class="eyebrow">Logger</div>
+					<div class="kpi__num">{ fallback(view.Record.Logger) }<span class="unit">source</span></div>
+					<div class="kpi__delta">{ fallback(view.Record.Environment) }</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Trace</div>
+					<div class="kpi__num">{ logShortTrace(view.Record.TraceID) }<span class="unit">trace</span></div>
+					<div class="kpi__delta">{ fallback(view.Record.SpanID) }</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Release</div>
+					<div class="kpi__num">{ fallback(view.Record.Release) }<span class="unit">version</span></div>
+					<div class="kpi__delta">project-scoped</div>
+				</div>
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Resource attributes</span>
+					<span class="chip">{ logAttributeCountLabel(view.Record.ResourceAttributes) }</span>
+				</div>
+				@LogAttributes(view.Record.ResourceAttributes)
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Log attributes</span>
+					<span class="chip">{ logAttributeCountLabel(view.Record.Attributes) }</span>
+				</div>
+				@LogAttributes(view.Record.Attributes)
+			</section>
+		</div>
+	}
+}
+
+templ LogAttributes(attributes []logapp.AttributeView) {
+	if len(attributes) == 0 {
+		<div class="empty">No attributes</div>
+	} else {
+		<div class="table-wrap table-wrap--embedded">
+			<table class="small-table">
+				<thead>
+					<tr>
+						<th>Key</th>
+						<th>Value</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, attribute := range attributes {
+						<tr>
+							<td class="mono break">{ attribute.Key }</td>
+							<td class="break">{ attribute.Value }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+func logCountLabel(view logapp.ListView) string {
+	if len(view.Logs) == 1 {
+		return "1 record"
+	}
+
+	return fmt.Sprintf("%d records", len(view.Logs))
+}
+
+func logAttributeCountLabel(attributes []logapp.AttributeView) string {
+	if len(attributes) == 1 {
+		return "1 attribute"
+	}
+
+	return fmt.Sprintf("%d attributes", len(attributes))
+}
+
+func logSeverityClass(severity string) string {
+	if severity == "error" || severity == "fatal" {
+		return "chip chip--error"
+	}
+
+	if severity == "warning" {
+		return "chip chip--warn"
+	}
+
+	return "chip"
+}
+
+func logShortTrace(traceID string) string {
+	if len(traceID) < 12 {
+		return fallback(traceID)
+	}
+
+	return traceID[:12]
+}

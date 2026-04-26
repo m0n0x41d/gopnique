@@ -34,6 +34,7 @@ const (
 	ActionMonitorCreated      Action = "monitor_created"
 	ActionMonitorStateChanged Action = "monitor_state_changed"
 	ActionStatusPageCreated   Action = "status_page_created"
+	ActionImportRunCompleted  Action = "import_run_completed"
 )
 
 type View struct {
@@ -74,5 +75,6 @@ func (action Action) Valid() bool {
 		action == ActionIssueStatusChanged ||
 		action == ActionMonitorCreated ||
 		action == ActionMonitorStateChanged ||
-		action == ActionStatusPageCreated
+		action == ActionStatusPageCreated ||
+		action == ActionImportRunCompleted
 }

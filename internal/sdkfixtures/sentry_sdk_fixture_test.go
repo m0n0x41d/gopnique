@@ -64,11 +64,12 @@ func TestSentrySDKFixtureReplay(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	handler := httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
@@ -131,8 +132,8 @@ func TestSentryCLIArtifactUploadReplay(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	vault, vaultErr := filesystem.NewVault(t.TempDir())
@@ -156,6 +157,7 @@ func TestSentryCLIArtifactUploadReplay(t *testing.T) {
 		DebugFileStore:    debugFileService,
 	}
 	handler := httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
@@ -218,8 +220,8 @@ func TestSentryJavaScriptSourceMapFixtureReplay(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	vault, vaultErr := filesystem.NewVault(t.TempDir())
@@ -238,6 +240,7 @@ func TestSentryJavaScriptSourceMapFixtureReplay(t *testing.T) {
 		SourceMapResolver: sourceMapService,
 	}
 	handler := httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,

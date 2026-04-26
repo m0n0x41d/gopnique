@@ -20,6 +20,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/sentryprotocol"
 	"github.com/ivanzakutnii/error-tracker/internal/app/debugfiles"
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
+	logapp "github.com/ivanzakutnii/error-tracker/internal/app/logs"
 	"github.com/ivanzakutnii/error-tracker/internal/app/minidumps"
 	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
 	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
@@ -39,6 +40,7 @@ var sentryKeyPattern = regexp.MustCompile(`(?:^|[\s,])(sentry_key|glitchtip_key)
 type SentryIngestBackend interface {
 	ingest.ProjectDirectory
 	ingest.IngestTransaction
+	logapp.IngestTransaction
 	ratelimitapp.Checker
 	userreportapp.Writer
 }
@@ -59,6 +61,7 @@ const (
 type parsedSentryEvent struct {
 	event       domain.CanonicalEvent
 	hasEvent    bool
+	logs        []domain.LogRecord
 	userReports []sentryprotocol.UserReportItem
 }
 
@@ -176,7 +179,7 @@ func handleSentryIngestCarrier(
 		return
 	}
 
-	if !parsed.hasEvent {
+	if !parsed.hasEvent && len(parsed.logs) == 0 {
 		reportErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
 		if reportErr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
@@ -196,6 +199,18 @@ func handleSentryIngestCarrier(
 
 	if !rateLimit.Allowed() {
 		writeRateLimitDecision(w, rateLimit)
+		return
+	}
+
+	if len(parsed.logs) > 0 {
+		receiptResult := logapp.Ingest(r.Context(), backend, logapp.NewIngestCommand(parsed.logs))
+		receipt, receiptErr := receiptResult.Value()
+		if receiptErr != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "storage_unavailable"})
+			return
+		}
+
+		writeLogReceipt(w, receipt)
 		return
 	}
 
@@ -716,8 +731,16 @@ func parseSentryRequest(
 		return result.Err[parsedSentryEvent](envelopeErr)
 	}
 
+	if len(envelope.Logs()) > 0 && len(envelope.UserReports()) > 0 {
+		return result.Err[parsedSentryEvent](sentryprotocol.NewProtocolError(sentryprotocol.ErrorInvalidEnvelope, "mixed log and report items"))
+	}
+
 	event, ok := envelope.Event()
 	if !ok {
+		if len(envelope.Logs()) > 0 {
+			return result.Ok(parsedSentryEvent{logs: envelope.Logs()})
+		}
+
 		return result.Ok(parsedSentryEvent{userReports: envelope.UserReports()})
 	}
 
@@ -1182,6 +1205,20 @@ func writeIngestReceipt(w http.ResponseWriter, receipt ingest.IngestReceipt) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+func writeLogReceipt(w http.ResponseWriter, receipt logapp.IngestReceipt) {
+	if receipt.Kind() == logapp.ReceiptQuotaRejected {
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"detail": receipt.Reason(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accepted": receipt.Count(),
+	})
 }
 
 func writeRateLimitDecision(w http.ResponseWriter, decision ratelimitapp.Decision) {

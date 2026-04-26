@@ -72,7 +72,7 @@ func (store *Store) MigrationStatus(ctx context.Context) (health.MigrationStatus
 		return health.MigrationStatus{}, scanErr
 	}
 
-	status.Ready = status.AppliedCount >= 30
+	status.Ready = status.AppliedCount >= 33
 
 	return status, nil
 }

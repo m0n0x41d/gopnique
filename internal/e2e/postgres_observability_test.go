@@ -32,11 +32,12 @@ func TestPostgresObservabilityAPIE2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
@@ -93,7 +94,7 @@ func TestPostgresObservabilityAPIE2E(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`"service_name":"error-tracker"`,
-		`"applied_count":30`,
+		`"applied_count":33`,
 		`"events":1`,
 		`"issues":1`,
 		`"notification_intents":1`,

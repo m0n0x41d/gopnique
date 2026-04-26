@@ -30,6 +30,9 @@ templ Layout(title string, active string) {
 					<a href="/performance" class={ railClass(active, "performance") } title="Performance">
 						<svg><use href="#i-dash"></use></svg>
 					</a>
+					<a href="/logs" class={ railClass(active, "logs") } title="Logs">
+						<svg><use href="#i-dash"></use></svg>
+					</a>
 					<a href="/uptime" class={ railClass(active, "uptime") } title="Uptime">
 						<svg><use href="#i-uptime"></use></svg>
 					</a>
@@ -86,6 +89,10 @@ templ Layout(title string, active string) {
 							<a href="/performance" class={ sideNavClass(active, "performance") }>
 								<svg><use href="#i-dash"></use></svg>
 								<span>Performance</span>
+							</a>
+							<a href="/logs" class={ sideNavClass(active, "logs") }>
+								<svg><use href="#i-dash"></use></svg>
+								<span>Logs</span>
 							</a>
 							<a href="/uptime" class={ sideNavClass(active, "uptime") }>
 								<svg><use href="#i-uptime"></use></svg>

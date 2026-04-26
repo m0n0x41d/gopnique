@@ -26,6 +26,7 @@ type EnvelopeResult struct {
 	itemType    string
 	ignored     []string
 	userReports []UserReportItem
+	logs        []domain.LogRecord
 	duplicate   bool
 }
 
@@ -109,6 +110,7 @@ func ParseEnvelope(
 		itemType:    state.itemType,
 		ignored:     append([]string{}, state.ignored...),
 		userReports: append([]UserReportItem{}, state.userReports...),
+		logs:        append([]domain.LogRecord{}, state.logs...),
 	})
 }
 
@@ -231,6 +233,7 @@ type envelopeState struct {
 	itemType    string
 	ignored     []string
 	userReports []UserReportItem
+	logs        []domain.LogRecord
 }
 
 func applyItem(
@@ -249,6 +252,10 @@ func applyItem(
 		return applyUserReportItem(state, item, payload)
 	}
 
+	if isLogItem(item.Type) {
+		return applyLogItem(project, receivedAt, state, item, payload)
+	}
+
 	if isIgnoredItem(item.Type) {
 		state.ignored = append(state.ignored, item.Type)
 		return result.Ok(state)
@@ -263,6 +270,10 @@ func applyItem(
 		return result.Err[envelopeState](NewProtocolError(ErrorInvalidEnvelope, "multiple supported event items"))
 	}
 
+	if len(state.logs) > 0 {
+		return result.Err[envelopeState](NewProtocolError(ErrorInvalidEnvelope, "mixed log and event items"))
+	}
+
 	eventResult := parseEventPayload(project, receivedAt, payload, item.Type, header.EventID)
 	event, eventErr := eventResult.Value()
 	if eventErr != nil {
@@ -274,6 +285,42 @@ func applyItem(
 	state.itemType = item.Type
 
 	return result.Ok(state)
+}
+
+func applyLogItem(
+	project ProjectContext,
+	receivedAt domain.TimePoint,
+	state envelopeState,
+	item itemHeader,
+	payload []byte,
+) result.Result[envelopeState] {
+	if state.hasEvent {
+		return result.Err[envelopeState](NewProtocolError(ErrorInvalidEnvelope, "mixed event and log items"))
+	}
+
+	logsResult := parseLogItem(project, receivedAt, item, payload)
+	logs, logsErr := logsResult.Value()
+	if logsErr != nil {
+		return result.Err[envelopeState](logsErr)
+	}
+
+	state.logs = append(state.logs, logs...)
+	state.itemType = item.Type
+
+	return result.Ok(state)
+}
+
+func parseLogItem(
+	project ProjectContext,
+	receivedAt domain.TimePoint,
+	item itemHeader,
+	payload []byte,
+) result.Result[[]domain.LogRecord] {
+	if item.Type == "otel_log" {
+		return parseOTLPLogItem(project, receivedAt, payload)
+	}
+
+	return parseSentryLogItem(project, receivedAt, payload)
 }
 
 func applyUserReportItem(
@@ -369,6 +416,10 @@ func isSupportedItem(itemType string) bool {
 	return itemType == "event" || itemType == "transaction"
 }
 
+func isLogItem(itemType string) bool {
+	return itemType == "log" || itemType == "otel_log"
+}
+
 func isUserReportItem(itemType string) bool {
 	return itemType == "user_report" || itemType == "feedback"
 }
@@ -378,8 +429,6 @@ func isIgnoredItem(itemType string) bool {
 		"attachment":       {},
 		"check_in":         {},
 		"client_report":    {},
-		"log":              {},
-		"otel_log":         {},
 		"profile":          {},
 		"profile_chunk":    {},
 		"replay_event":     {},
@@ -417,6 +466,10 @@ func (envelope EnvelopeResult) ItemType() string {
 
 func (envelope EnvelopeResult) UserReports() []UserReportItem {
 	return append([]UserReportItem{}, envelope.userReports...)
+}
+
+func (envelope EnvelopeResult) Logs() []domain.LogRecord {
+	return append([]domain.LogRecord{}, envelope.logs...)
 }
 
 func (envelope EnvelopeResult) IgnoredItems() []string {

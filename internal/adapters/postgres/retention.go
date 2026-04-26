@@ -191,6 +191,12 @@ func purgeExpiredProjectData(
 	}
 	purged.EventsDeleted = events
 
+	logs, logsErr := deleteExpiredLogRecords(ctx, tx, plan)
+	if logsErr != nil {
+		return retentionapp.PurgeResult{}, logsErr
+	}
+	purged.LogRecordsDeleted = logs
+
 	stats, statsErr := deleteExpiredStats(ctx, tx, plan)
 	if statsErr != nil {
 		return retentionapp.PurgeResult{}, statsErr
@@ -371,6 +377,28 @@ with doomed as (
 delete from events e
 using doomed
 where e.id = doomed.id
+`
+	return execCount(ctx, tx, sql, plan.Scope.OrganizationID.String(), plan.Scope.ProjectID.String(), plan.EventCutoff, plan.BatchSize)
+}
+
+func deleteExpiredLogRecords(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan retentionapp.ProjectPurgePlan,
+) (int, error) {
+	sql := `
+with doomed as (
+  select id
+  from log_records
+  where organization_id = $1
+    and project_id = $2
+    and received_at < $3
+  order by received_at asc
+  limit $4
+)
+delete from log_records l
+using doomed
+where l.id = doomed.id
 `
 	return execCount(ctx, tx, sql, plan.Scope.OrganizationID.String(), plan.Scope.ProjectID.String(), plan.EventCutoff, plan.BatchSize)
 }

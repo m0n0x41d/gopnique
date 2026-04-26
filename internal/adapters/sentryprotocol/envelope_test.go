@@ -68,6 +68,102 @@ func TestParseEnvelopeAcceptsLengthPrefixedTransactionItem(t *testing.T) {
 	}
 }
 
+func TestParseEnvelopeAcceptsSentryLogItem(t *testing.T) {
+	payload := `{"items":[{"timestamp":"2026-04-24T10:00:00Z","level":"warning","body":"checkout failed","logger":"web","trace_id":"0123456789abcdef0123456789abcdef","span_id":"1111111111111111","release":"api@1.2.3","environment":"production","resource_attributes":{"service.name":{"value":"checkout","type":"string"}},"attributes":{"http.route":{"value":"/checkout","type":"string"}}}]}`
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"log","length":` + intString(len(payload)) + `}`,
+		payload,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	if parsed.HasEvent() {
+		t.Fatal("log item must not create a canonical event")
+	}
+
+	logs := parsed.Logs()
+	if len(logs) != 1 {
+		t.Fatalf("expected one log, got %d", len(logs))
+	}
+
+	if logs[0].Severity() != domain.LogSeverityWarning {
+		t.Fatalf("unexpected severity: %s", logs[0].Severity())
+	}
+
+	if logs[0].Body() != "checkout failed" || logs[0].Logger() != "web" {
+		t.Fatalf("unexpected log fields: %#v", logs[0])
+	}
+
+	if logs[0].ResourceAttributes()["service.name"] != "checkout" {
+		t.Fatalf("unexpected resource attributes: %#v", logs[0].ResourceAttributes())
+	}
+}
+
+func TestParseEnvelopeAcceptsOTelLogItem(t *testing.T) {
+	payload := `{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-api"}},{"key":"deployment.environment","value":{"stringValue":"production"}},{"key":"service.version","value":{"stringValue":"api@1.2.3"}}]},"scopeLogs":[{"scope":{"name":"checkout.logger"},"logRecords":[{"timeUnixNano":"1776256800000000000","severityText":"ERROR","body":{"stringValue":"otel checkout failed"},"traceId":"0123456789abcdef0123456789abcdef","spanId":"1111111111111111","attributes":[{"key":"http.route","value":{"stringValue":"/checkout"}}]}]}]}]}`
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"otel_log","length":` + intString(len(payload)) + `}`,
+		payload,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	parsed, parseErr := result.Value()
+	if parseErr != nil {
+		t.Fatalf("parse envelope: %v", parseErr)
+	}
+
+	logs := parsed.Logs()
+	if len(logs) != 1 {
+		t.Fatalf("expected one log, got %d", len(logs))
+	}
+
+	if logs[0].Severity() != domain.LogSeverityError {
+		t.Fatalf("unexpected severity: %s", logs[0].Severity())
+	}
+
+	if logs[0].Body() != "otel checkout failed" || logs[0].Logger() != "checkout.logger" {
+		t.Fatalf("unexpected otel log fields: %#v", logs[0])
+	}
+
+	if logs[0].Release() != "api@1.2.3" || logs[0].Environment() != "production" {
+		t.Fatalf("unexpected otel dimensions: %#v", logs[0])
+	}
+}
+
+func TestParseEnvelopeRejectsMixedEventAndLog(t *testing.T) {
+	envelope := strings.Join([]string{
+		`{}`,
+		`{"type":"event"}`,
+		`{"event_id":"550e8400e29b41d4a716446655440000","timestamp":"2026-04-24T10:00:00Z","message":"hello"}`,
+		`{"type":"log"}`,
+		`{"timestamp":"2026-04-24T10:00:00Z","body":"log"}`,
+	}, "\n")
+
+	result := ParseEnvelope(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(envelope),
+	)
+	_, parseErr := result.Value()
+	if parseErr == nil {
+		t.Fatal("expected mixed event and log to fail")
+	}
+}
+
 func TestParseEnvelopeIgnoresUnsupportedItems(t *testing.T) {
 	envelope := strings.Join([]string{
 		`{}`,

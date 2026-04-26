@@ -48,6 +48,7 @@ type ProjectPurgePlan struct {
 
 type PurgeResult struct {
 	EventsDeleted       int
+	LogRecordsDeleted   int
 	PayloadsCleared     int
 	DeliveryRowsDeleted int
 	UserReportsDeleted  int
@@ -58,6 +59,7 @@ type PurgeResult struct {
 type Summary struct {
 	ProjectsProcessed   int
 	EventsDeleted       int
+	LogRecordsDeleted   int
 	PayloadsCleared     int
 	DeliveryRowsDeleted int
 	UserReportsDeleted  int
@@ -200,6 +202,7 @@ func NormalizePolicy(policy Policy) result.Result[Policy] {
 
 func AddPurgeResult(summary Summary, purged PurgeResult) Summary {
 	summary.EventsDeleted += purged.EventsDeleted
+	summary.LogRecordsDeleted += purged.LogRecordsDeleted
 	summary.PayloadsCleared += purged.PayloadsCleared
 	summary.DeliveryRowsDeleted += purged.DeliveryRowsDeleted
 	summary.UserReportsDeleted += purged.UserReportsDeleted

@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
+	logapp "github.com/ivanzakutnii/error-tracker/internal/app/logs"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
@@ -15,13 +17,39 @@ func (store txStore) CheckQuota(
 	ctx context.Context,
 	event domain.CanonicalEvent,
 ) result.Result[ingest.QuotaDecision] {
-	snapshotResult := quotaSnapshotForEvent(ctx, store.tx, event)
+	snapshotResult := quotaSnapshotForScope(
+		ctx,
+		store.tx,
+		event.OrganizationID(),
+		event.ProjectID(),
+		event.ReceivedAt().Time(),
+	)
 	snapshot, snapshotErr := snapshotResult.Value()
 	if snapshotErr != nil {
 		return result.Err[ingest.QuotaDecision](snapshotErr)
 	}
 
 	return result.Ok(quotaDecision(snapshot))
+}
+
+func (store txStore) CheckLogQuota(
+	ctx context.Context,
+	record domain.LogRecord,
+	count int,
+) result.Result[logapp.QuotaDecision] {
+	snapshotResult := quotaSnapshotForScope(
+		ctx,
+		store.tx,
+		record.OrganizationID(),
+		record.ProjectID(),
+		record.ReceivedAt().Time(),
+	)
+	snapshot, snapshotErr := snapshotResult.Value()
+	if snapshotErr != nil {
+		return result.Err[logapp.QuotaDecision](snapshotErr)
+	}
+
+	return result.Ok(logQuotaDecision(snapshot, count))
 }
 
 func (store *Store) projectQuotaPolicy(
@@ -73,6 +101,22 @@ func quotaSnapshotForEvent(
 	tx pgx.Tx,
 	event domain.CanonicalEvent,
 ) result.Result[quotaSnapshot] {
+	return quotaSnapshotForScope(
+		ctx,
+		tx,
+		event.OrganizationID(),
+		event.ProjectID(),
+		event.ReceivedAt().Time(),
+	)
+}
+
+func quotaSnapshotForScope(
+	ctx context.Context,
+	tx pgx.Tx,
+	organizationID domain.OrganizationID,
+	projectID domain.ProjectID,
+	receivedAt time.Time,
+) result.Result[quotaSnapshot] {
 	sql := `
 with bounds as (
   select
@@ -107,9 +151,9 @@ left join organization_quota_policies oqp
 	scanErr := tx.QueryRow(
 		ctx,
 		sql,
-		event.OrganizationID().String(),
-		event.ProjectID().String(),
-		event.ReceivedAt().Time(),
+		organizationID.String(),
+		projectID.String(),
+		receivedAt,
 	).Scan(
 		&snapshot.projectEnabled,
 		&snapshot.projectDailyLimit,
@@ -126,13 +170,37 @@ left join organization_quota_policies oqp
 }
 
 func quotaDecision(snapshot quotaSnapshot) ingest.QuotaDecision {
-	if snapshot.organizationEnabled && snapshot.organizationUsed >= snapshot.organizationLimit {
+	if quotaExceeded(snapshot.organizationEnabled, snapshot.organizationUsed, snapshot.organizationLimit, 1) {
 		return ingest.NewQuotaRejected("organization_quota_exceeded")
 	}
 
-	if snapshot.projectEnabled && snapshot.projectDailyUsed >= snapshot.projectDailyLimit {
+	if quotaExceeded(snapshot.projectEnabled, snapshot.projectDailyUsed, snapshot.projectDailyLimit, 1) {
 		return ingest.NewQuotaRejected("project_quota_exceeded")
 	}
 
 	return ingest.NewQuotaAllowed()
+}
+
+func logQuotaDecision(snapshot quotaSnapshot, count int) logapp.QuotaDecision {
+	if count < 1 {
+		count = 1
+	}
+
+	if quotaExceeded(snapshot.organizationEnabled, snapshot.organizationUsed, snapshot.organizationLimit, int64(count)) {
+		return logapp.NewQuotaRejected("organization_quota_exceeded")
+	}
+
+	if quotaExceeded(snapshot.projectEnabled, snapshot.projectDailyUsed, snapshot.projectDailyLimit, int64(count)) {
+		return logapp.NewQuotaRejected("project_quota_exceeded")
+	}
+
+	return logapp.NewQuotaAllowed()
+}
+
+func quotaExceeded(enabled bool, used int64, limit int64, next int64) bool {
+	if !enabled {
+		return false
+	}
+
+	return used+next > limit
 }

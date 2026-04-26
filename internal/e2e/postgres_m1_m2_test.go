@@ -53,13 +53,14 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	publicURL := "http://example.test"
 	resolver := e2eResolver{"hooks.example.test": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
@@ -202,6 +203,22 @@ func TestPostgresM1M2E2E(t *testing.T) {
 		t.Fatalf("unexpected transaction receipt: %s", transactionReceipt.Body)
 	}
 
+	logReceipt := postLogEnvelope(t, client, server.URL, publicKey)
+	if logReceipt.StatusCode != http.StatusOK {
+		t.Fatalf("expected log envelope ok, got %d: %s", logReceipt.StatusCode, logReceipt.Body)
+	}
+	if !strings.Contains(logReceipt.Body, `"accepted":1`) {
+		t.Fatalf("unexpected log receipt: %s", logReceipt.Body)
+	}
+
+	otelLogReceipt := postOTelLogEnvelope(t, client, server.URL, publicKey)
+	if otelLogReceipt.StatusCode != http.StatusOK {
+		t.Fatalf("expected otel log envelope ok, got %d: %s", otelLogReceipt.StatusCode, otelLogReceipt.Body)
+	}
+	if !strings.Contains(otelLogReceipt.Body, `"accepted":1`) {
+		t.Fatalf("unexpected otel log receipt: %s", otelLogReceipt.Body)
+	}
+
 	conflict := postConflictingEnvelope(t, client, server.URL, publicKey)
 	if conflict.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected auth conflict forbidden, got %d", conflict.StatusCode)
@@ -227,6 +244,9 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	}
 	if strings.Contains(issues.Body, "GET /checkout") {
 		t.Fatalf("transaction leaked into issue list: %s", issues.Body)
+	}
+	if strings.Contains(issues.Body, "checkout log failed") || strings.Contains(issues.Body, "otel checkout failed") {
+		t.Fatalf("log leaked into issue list: %s", issues.Body)
 	}
 
 	issueID := issueIDForEvent(t, ctx, databaseURL, "980e8400-e29b-41d4-a716-446655440000")
@@ -266,6 +286,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	assertUserReportVisible(t, client, server.URL, issueID)
 	assertProjectStatsPage(t, client, server.URL)
 	assertPerformancePages(t, ctx, databaseURL, client, server.URL)
+	assertLogPages(t, ctx, databaseURL, client, server.URL)
 	addIssueCommentThroughUI(t, client, server.URL, issueID, "E2E operator comment")
 	assertIssueCommentVisible(t, client, server.URL, issueID, "E2E operator comment")
 	teamID := assignIssueThroughUI(t, ctx, databaseURL, client, server.URL, issueID)
@@ -297,6 +318,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	}
 
 	assertPersistedDimensions(t, ctx, databaseURL)
+	assertPersistedLogs(t, ctx, databaseURL)
 	deliverTelegram(t, ctx, store)
 	assertTelegramDelivered(t, ctx, databaseURL)
 	deliverWebhook(t, ctx, store, resolver, webhookURL)
@@ -1044,6 +1066,70 @@ func assertPerformancePages(
 	} {
 		if !strings.Contains(detail.Body, expected) {
 			t.Fatalf("expected performance detail to contain %q: %s", expected, detail.Body)
+		}
+	}
+}
+
+func assertLogPages(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+
+	list := request(t, client, http.MethodGet, baseURL+"/logs", "", nil)
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("expected logs ok, got %d: %s", list.StatusCode, list.Body)
+	}
+
+	for _, expected := range []string{
+		"Log records",
+		"checkout log failed",
+		"checkout.web",
+		"production",
+		"web@1.2.3",
+		"otel checkout failed",
+		"checkout.otel",
+	} {
+		if !strings.Contains(list.Body, expected) {
+			t.Fatalf("expected log list to contain %q: %s", expected, list.Body)
+		}
+	}
+
+	filtered := request(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/logs?severity=warning&resource_key=service.name&resource_value=checkout-api",
+		"",
+		nil,
+	)
+	if filtered.StatusCode != http.StatusOK {
+		t.Fatalf("expected filtered logs ok, got %d: %s", filtered.StatusCode, filtered.Body)
+	}
+	if !strings.Contains(filtered.Body, "otel checkout failed") || strings.Contains(filtered.Body, "checkout log failed") {
+		t.Fatalf("unexpected filtered logs: %s", filtered.Body)
+	}
+
+	logID := logIDForBody(t, ctx, databaseURL, "checkout log failed")
+	detail := request(t, client, http.MethodGet, baseURL+"/logs/"+logID, "", nil)
+	if detail.StatusCode != http.StatusOK {
+		t.Fatalf("expected log detail ok, got %d: %s", detail.StatusCode, detail.Body)
+	}
+
+	for _, expected := range []string{
+		"Resource attributes",
+		"service.name",
+		"checkout",
+		"Log attributes",
+		"http.route",
+		"/checkout",
+		"0123456789ab",
+	} {
+		if !strings.Contains(detail.Body, expected) {
+			t.Fatalf("expected log detail to contain %q: %s", expected, detail.Body)
 		}
 	}
 }
@@ -1907,6 +1993,36 @@ where event_id = $1
 	return groupID
 }
 
+func logIDForBody(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	body string,
+) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	query := `
+select id::text
+from log_records
+where body = $1
+order by received_at desc
+limit 1
+`
+	var logID string
+	scanErr := pool.QueryRow(ctx, query, body).Scan(&logID)
+	if scanErr != nil {
+		t.Fatalf("log id for body: %v", scanErr)
+	}
+
+	return logID
+}
+
 func addTelegramDestination(t *testing.T, ctx context.Context, store *postgres.Store) string {
 	t.Helper()
 
@@ -2062,6 +2178,86 @@ func postTransactionEnvelope(
 	body := strings.Join([]string{
 		fmt.Sprintf(`{"dsn":"http://%s@example.test/1","event_id":"910e8400e29b41d4a716446655440000"}`, publicKey),
 		fmt.Sprintf(`{"type":"transaction","length":%d}`, len(payload)),
+		payload,
+	}, "\n")
+
+	return request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/envelope/",
+		"application/x-sentry-envelope",
+		strings.NewReader(body),
+	)
+}
+
+func postLogEnvelope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) responseSnapshot {
+	t.Helper()
+
+	payload := strings.Join([]string{
+		`{"items":[{`,
+		`"timestamp":"2026-04-24T13:04:00Z",`,
+		`"level":"error",`,
+		`"body":"checkout log failed",`,
+		`"logger":"checkout.web",`,
+		`"trace_id":"0123456789abcdef0123456789abcdef",`,
+		`"span_id":"1111111111111111",`,
+		`"release":"web@1.2.3",`,
+		`"environment":"production",`,
+		`"resource_attributes":{"service.name":{"value":"checkout","type":"string"}},`,
+		`"attributes":{"http.route":{"value":"/checkout","type":"string"}}`,
+		`}]}`,
+	}, "")
+	body := strings.Join([]string{
+		fmt.Sprintf(`{"dsn":"http://%s@example.test/1"}`, publicKey),
+		fmt.Sprintf(`{"type":"log","length":%d}`, len(payload)),
+		payload,
+	}, "\n")
+
+	return request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/envelope/",
+		"application/x-sentry-envelope",
+		strings.NewReader(body),
+	)
+}
+
+func postOTelLogEnvelope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) responseSnapshot {
+	t.Helper()
+
+	payload := strings.Join([]string{
+		`{"resourceLogs":[{`,
+		`"resource":{"attributes":[`,
+		`{"key":"service.name","value":{"stringValue":"checkout-api"}},`,
+		`{"key":"deployment.environment","value":{"stringValue":"production"}},`,
+		`{"key":"service.version","value":{"stringValue":"api@1.2.3"}}`,
+		`]},`,
+		`"scopeLogs":[{"scope":{"name":"checkout.otel"},`,
+		`"logRecords":[{`,
+		`"timeUnixNano":"1776256800000000000",`,
+		`"severityText":"WARN",`,
+		`"body":{"stringValue":"otel checkout failed"},`,
+		`"traceId":"0123456789abcdef0123456789abcdef",`,
+		`"spanId":"2222222222222222",`,
+		`"attributes":[{"key":"http.route","value":{"stringValue":"/otel-checkout"}}]`,
+		`}]}]`,
+		`}]}`,
+	}, "")
+	body := strings.Join([]string{
+		fmt.Sprintf(`{"dsn":"http://%s@example.test/1"}`, publicKey),
+		fmt.Sprintf(`{"type":"otel_log","length":%d}`, len(payload)),
 		payload,
 	}, "\n")
 
@@ -2238,6 +2434,62 @@ where event_id = '980e8400-e29b-41d4-a716-446655440000'
 
 	if clientIPTagCount != 0 || payloadHasClientIP {
 		t.Fatalf("expected client ip to be scrubbed, tag_count=%d payload_has=%t", clientIPTagCount, payloadHasClientIP)
+	}
+}
+
+func assertPersistedLogs(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	query := `
+select
+  count(*),
+  count(*) filter (where body = 'checkout log failed' and severity = 'error'),
+  count(*) filter (where body = 'otel checkout failed' and severity = 'warning'),
+  count(*) filter (where resource_attributes->>'service.name' = 'checkout-api'),
+  count(*) filter (where attributes->>'http.route' = '/checkout')
+from log_records
+`
+	var total int
+	var sentryLogs int
+	var otelLogs int
+	var otelResourceMatches int
+	var sentryAttributeMatches int
+	scanErr := pool.QueryRow(ctx, query).Scan(
+		&total,
+		&sentryLogs,
+		&otelLogs,
+		&otelResourceMatches,
+		&sentryAttributeMatches,
+	)
+	if scanErr != nil {
+		t.Fatalf("logs: %v", scanErr)
+	}
+
+	if total != 2 || sentryLogs != 1 || otelLogs != 1 {
+		t.Fatalf("unexpected persisted logs: total=%d sentry=%d otel=%d", total, sentryLogs, otelLogs)
+	}
+
+	if otelResourceMatches != 1 || sentryAttributeMatches != 1 {
+		t.Fatalf("unexpected log attributes: resource=%d attribute=%d", otelResourceMatches, sentryAttributeMatches)
+	}
+
+	var eventLeaks int
+	leakErr := pool.QueryRow(
+		ctx,
+		`select count(*) from events where title in ('checkout log failed', 'otel checkout failed')`,
+	).Scan(&eventLeaks)
+	if leakErr != nil {
+		t.Fatalf("log event leak query: %v", leakErr)
+	}
+
+	if eventLeaks != 0 {
+		t.Fatalf("log records created canonical events: %d", eventLeaks)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	dimensionapp "github.com/ivanzakutnii/error-tracker/internal/app/dimensions"
 	"github.com/ivanzakutnii/error-tracker/internal/app/health"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
+	logapp "github.com/ivanzakutnii/error-tracker/internal/app/logs"
 	memberapp "github.com/ivanzakutnii/error-tracker/internal/app/members"
 	"github.com/ivanzakutnii/error-tracker/internal/app/minidumps"
 	observabilityapp "github.com/ivanzakutnii/error-tracker/internal/app/observability"
@@ -53,6 +54,7 @@ func New(
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
 	performanceReader performanceapp.Reader,
+	logReader logapp.Reader,
 	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
@@ -66,7 +68,7 @@ func New(
 ) *Server {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, auth),
+		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, logReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -81,6 +83,7 @@ func NewHandler(
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
 	performanceReader performanceapp.Reader,
+	logReader logapp.Reader,
 	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
@@ -92,7 +95,7 @@ func NewHandler(
 	enrichments IngestEnrichments,
 	auth AuthSettings,
 ) http.Handler {
-	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, NewSessionCodec(auth.SecretKey), auth)
+	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, logReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, NewSessionCodec(auth.SecretKey), auth)
 }
 
 func newMux(
@@ -114,7 +117,7 @@ func newMux(
 	sessions SessionCodec,
 	auth AuthSettings,
 ) *http.ServeMux {
-	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, nil, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, sessions, auth)
+	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, nil, nil, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, sessions, auth)
 }
 
 func newMuxWithUptime(
@@ -125,6 +128,7 @@ func newMuxWithUptime(
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
 	performanceReader performanceapp.Reader,
+	logReader logapp.Reader,
 	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
@@ -165,10 +169,14 @@ func newMuxWithUptime(
 	mux.HandleFunc("POST /setup", setupPostHandler(operatorAccess, sessions, auth))
 	mux.HandleFunc("GET /login", loginGetHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /login", loginPostHandler(operatorAccess, sessions))
+	mux.HandleFunc("GET /auth/oidc/{provider_slug}/start", oidcStartHandler(operatorAccess, sessions, auth))
+	mux.HandleFunc("GET /auth/oidc/{provider_slug}/callback", oidcCallbackHandler(operatorAccess, sessions, auth))
 	mux.HandleFunc("POST /logout", logoutPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("GET /stats", projectStatsHandler(statsReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /performance", performanceListHandler(performanceReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /performance/{group_id}", performanceDetailHandler(performanceReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /logs", logListHandler(logReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /logs/{log_id}", logDetailHandler(logReader, operatorAccess, sessions))
 	mux.HandleFunc("GET /uptime", uptimeHandler(uptimeManager, operatorAccess, sessions))
 	mux.HandleFunc("POST /uptime/monitors", createHTTPMonitorHandler(uptimeManager, resolver, operatorAccess, sessions))
 	mux.HandleFunc("POST /uptime/heartbeats", createHeartbeatMonitorHandler(uptimeManager, operatorAccess, sessions))

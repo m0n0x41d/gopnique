@@ -26,7 +26,9 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/webhook"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/zulip"
 	"github.com/ivanzakutnii/error-tracker/internal/app/debugfiles"
+	importapp "github.com/ivanzakutnii/error-tracker/internal/app/importer"
 	"github.com/ivanzakutnii/error-tracker/internal/app/minidumps"
+	oauthapp "github.com/ivanzakutnii/error-tracker/internal/app/oauth"
 	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/runtime/config"
@@ -89,6 +91,7 @@ func runServer(env []string, stdout io.Writer, stderr io.Writer, mode config.Mod
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
 		store,
 		store,
 		store,
@@ -176,6 +179,7 @@ func runAllInOne(env []string, stdout io.Writer, stderr io.Writer) int {
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
 		store,
 		store,
 		store,
@@ -296,8 +300,8 @@ func runMigrate(args []string, env []string, stdout io.Writer, stderr io.Writer)
 
 func runAdmin(args []string, env []string, stdout io.Writer, stderr io.Writer) int {
 	subcommand := secondArg(args)
-	if subcommand != "check-imports" && subcommand != "bootstrap" && subcommand != "telegram" && subcommand != "alert" && subcommand != "sourcemap" && subcommand != "debugfile" && subcommand != "minidump" {
-		_, _ = fmt.Fprintln(stderr, "usage: error-tracker admin bootstrap|check-imports|telegram|alert|sourcemap|debugfile|minidump")
+	if subcommand != "check-imports" && subcommand != "bootstrap" && subcommand != "telegram" && subcommand != "alert" && subcommand != "sourcemap" && subcommand != "debugfile" && subcommand != "minidump" && subcommand != "oauth" && subcommand != "importer" {
+		_, _ = fmt.Fprintln(stderr, "usage: error-tracker admin bootstrap|check-imports|telegram|alert|sourcemap|debugfile|minidump|oauth|importer")
 		return 2
 	}
 
@@ -325,6 +329,14 @@ func runAdmin(args []string, env []string, stdout io.Writer, stderr io.Writer) i
 		return runMinidumpAdmin(args[2:], env, stdout, stderr)
 	}
 
+	if subcommand == "oauth" {
+		return runOAuthAdmin(args[2:], env, stdout, stderr)
+	}
+
+	if subcommand == "importer" {
+		return runImporterAdmin(args[2:], env, stdout, stderr)
+	}
+
 	violations, checkErr := importcheck.Check(".")
 	if checkErr != nil {
 		_, _ = fmt.Fprintln(stderr, checkErr)
@@ -341,6 +353,224 @@ func runAdmin(args []string, env []string, stdout io.Writer, stderr io.Writer) i
 	}
 
 	_, _ = fmt.Fprintln(stdout, "import boundaries ok")
+	return 0
+}
+
+func runImporterAdmin(args []string, env []string, stdout io.Writer, stderr io.Writer) int {
+	subcommand := firstArg(args)
+	if subcommand != "dry-run" && subcommand != "apply" {
+		_, _ = fmt.Fprintln(stderr, "usage: error-tracker admin importer dry-run|apply --project-ref <ref> --source-system <source> --path <jsonl>")
+		return 2
+	}
+
+	flags := flag.NewFlagSet("importer "+subcommand, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	projectRef := flags.String("project-ref", "", "project ingest ref")
+	sourceSystemInput := flags.String("source-system", "", "import source system slug")
+	pathInput := flags.String("path", "", "JSONL import file path")
+	actorID := flags.String("actor-id", "", "optional operator id for audit")
+	parseErr := flags.Parse(args[1:])
+	if parseErr != nil {
+		return 2
+	}
+
+	cfg, cfgErr := config.Load(env, config.ModeAdmin)
+	if cfgErr != nil {
+		_, _ = fmt.Fprintln(stderr, cfgErr)
+		return 1
+	}
+
+	store, storeErr := postgres.NewStore(context.Background(), cfg.DatabaseURL)
+	if storeErr != nil {
+		_, _ = fmt.Fprintln(stderr, storeErr)
+		return 1
+	}
+	defer store.Close()
+
+	manifest, manifestErr := loadImportManifest(
+		context.Background(),
+		store,
+		*projectRef,
+		*sourceSystemInput,
+		importModeForSubcommand(subcommand),
+	)
+	if manifestErr != nil {
+		_, _ = fmt.Fprintln(stderr, manifestErr)
+		return 1
+	}
+
+	if *pathInput == "" {
+		_, _ = fmt.Fprintln(stderr, "--path is required")
+		return 1
+	}
+
+	file, openErr := os.Open(*pathInput)
+	if openErr != nil {
+		_, _ = fmt.Fprintln(stderr, openErr)
+		return 1
+	}
+	defer file.Close()
+
+	parseResult := importapp.ParseJSONL(file, manifest)
+	parsed, parseResultErr := parseResult.Value()
+	if parseResultErr != nil {
+		_, _ = fmt.Fprintln(stderr, parseResultErr)
+		return 1
+	}
+
+	dryRun := importapp.DryRun(parsed)
+	if subcommand == "dry-run" {
+		writeImportDryRun(stdout, stderr, dryRun)
+		if dryRun.InvalidRows > 0 {
+			return 1
+		}
+
+		return 0
+	}
+
+	if dryRun.InvalidRows > 0 {
+		writeImportDryRun(stdout, stderr, dryRun)
+		return 1
+	}
+
+	applyResult := importapp.Apply(context.Background(), store, importapp.ApplyCommand{
+		Manifest: manifest,
+		Records:  parsed.Records(),
+		ActorID:  *actorID,
+	})
+	applied, applyErr := applyResult.Value()
+	if applyErr != nil {
+		_, _ = fmt.Fprintln(stderr, applyErr)
+		return 1
+	}
+
+	writeImportApply(stdout, applied)
+	if applied.FailedRows > 0 {
+		return 1
+	}
+
+	return 0
+}
+
+func importModeForSubcommand(subcommand string) domain.ImportMode {
+	if subcommand == "apply" {
+		return domain.ImportModeApply
+	}
+
+	return domain.ImportModeDryRun
+}
+
+func loadImportManifest(
+	ctx context.Context,
+	store *postgres.Store,
+	projectRef string,
+	sourceSystemInput string,
+	mode domain.ImportMode,
+) (domain.ImportManifest, error) {
+	if projectRef == "" {
+		return domain.ImportManifest{}, errors.New("--project-ref is required")
+	}
+
+	scope, scopeErr := store.LookupProjectByRef(ctx, projectRef)
+	if scopeErr != nil {
+		return domain.ImportManifest{}, scopeErr
+	}
+
+	sourceSystem, sourceErr := domain.NewImportSourceSystem(sourceSystemInput)
+	if sourceErr != nil {
+		return domain.ImportManifest{}, sourceErr
+	}
+
+	manifest, manifestErr := domain.NewImportManifest(domain.ImportManifestParams{
+		OrganizationID: scope.OrganizationID,
+		ProjectID:      scope.ProjectID,
+		SourceSystem:   sourceSystem,
+		Mode:           mode,
+	})
+	if manifestErr != nil {
+		return domain.ImportManifest{}, manifestErr
+	}
+
+	return manifest, nil
+}
+
+func writeImportDryRun(stdout io.Writer, stderr io.Writer, dryRun importapp.DryRunResult) {
+	_, _ = fmt.Fprintf(stdout, "total_rows: %d\n", dryRun.TotalRows)
+	_, _ = fmt.Fprintf(stdout, "valid_rows: %d\n", dryRun.ValidRows)
+	_, _ = fmt.Fprintf(stdout, "invalid_rows: %d\n", dryRun.InvalidRows)
+
+	for _, rowErr := range dryRun.Errors {
+		_, _ = fmt.Fprintf(stderr, "line %d: %s\n", rowErr.Line, rowErr.Message)
+	}
+}
+
+func writeImportApply(stdout io.Writer, applied importapp.ApplyResult) {
+	_, _ = fmt.Fprintf(stdout, "run_id: %s\n", applied.RunID)
+	_, _ = fmt.Fprintf(stdout, "total_rows: %d\n", applied.TotalRows)
+	_, _ = fmt.Fprintf(stdout, "applied_rows: %d\n", applied.AppliedRows)
+	_, _ = fmt.Fprintf(stdout, "duplicate_rows: %d\n", applied.DuplicateRows)
+	_, _ = fmt.Fprintf(stdout, "skipped_rows: %d\n", applied.SkippedRows)
+	_, _ = fmt.Fprintf(stdout, "failed_rows: %d\n", applied.FailedRows)
+}
+
+func runOAuthAdmin(args []string, env []string, stdout io.Writer, stderr io.Writer) int {
+	if firstArg(args) != "upsert-oidc" {
+		_, _ = fmt.Fprintln(stderr, "usage: error-tracker admin oauth upsert-oidc --slug <slug> --name <name> --issuer <url> --client-id <id> --authorization-url <url> --token-url <url> --userinfo-url <url>")
+		return 2
+	}
+
+	flags := flag.NewFlagSet("oauth upsert-oidc", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	slug := flags.String("slug", "", "provider slug")
+	name := flags.String("name", "", "operator-visible provider name")
+	issuer := flags.String("issuer", "", "OIDC issuer URL")
+	clientID := flags.String("client-id", "", "OIDC client id")
+	clientSecret := flags.String("client-secret", "", "optional OIDC client secret")
+	authorizationURL := flags.String("authorization-url", "", "authorization endpoint URL")
+	tokenURL := flags.String("token-url", "", "token endpoint URL")
+	userInfoURL := flags.String("userinfo-url", "", "userinfo endpoint URL")
+	scopes := flags.String("scopes", oauthapp.DefaultScopes, "space-separated OIDC scopes")
+	enabled := flags.Bool("enabled", true, "whether the provider can be used")
+	parseErr := flags.Parse(args[1:])
+	if parseErr != nil {
+		return 2
+	}
+
+	cfg, cfgErr := config.Load(env, config.ModeAdmin)
+	if cfgErr != nil {
+		_, _ = fmt.Fprintln(stderr, cfgErr)
+		return 1
+	}
+
+	store, storeErr := postgres.NewStore(context.Background(), cfg.DatabaseURL)
+	if storeErr != nil {
+		_, _ = fmt.Fprintln(stderr, storeErr)
+		return 1
+	}
+	defer store.Close()
+
+	provider, providerErr := store.UpsertOIDCProvider(context.Background(), oauthapp.ProviderConfigInput{
+		Slug:                  *slug,
+		DisplayName:           *name,
+		Issuer:                *issuer,
+		ClientID:              *clientID,
+		ClientSecret:          *clientSecret,
+		AuthorizationEndpoint: *authorizationURL,
+		TokenEndpoint:         *tokenURL,
+		UserInfoEndpoint:      *userInfoURL,
+		Scopes:                *scopes,
+		Enabled:               *enabled,
+	})
+	if providerErr != nil {
+		_, _ = fmt.Fprintln(stderr, providerErr)
+		return 1
+	}
+
+	_, _ = fmt.Fprintf(stdout, "provider_id: %s\n", provider.ID())
+	_, _ = fmt.Fprintf(stdout, "slug: %s\n", provider.Slug().String())
+	_, _ = fmt.Fprintf(stdout, "display_name: %s\n", provider.DisplayName())
+	_, _ = fmt.Fprintf(stdout, "enabled: %t\n", provider.Enabled())
+
 	return 0
 }
 

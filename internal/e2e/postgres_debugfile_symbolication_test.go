@@ -40,8 +40,8 @@ func TestPostgresDebugFileSymbolicationE2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 30 {
-		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 33 {
+		t.Fatalf("expected 33 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	vault, vaultErr := filesystem.NewVault(filepath.Clean(t.TempDir()))
@@ -55,6 +55,7 @@ func TestPostgresDebugFileSymbolicationE2E(t *testing.T) {
 	}
 
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
 		store,
 		store,
 		store,
