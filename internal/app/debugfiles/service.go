@@ -59,6 +59,10 @@ func NewService(vault artifacts.ArtifactVault) (*Service, error) {
 	return &Service{vault: vault}, nil
 }
 
+func MaxUploadBytes() int64 {
+	return debugFileMaxBytes
+}
+
 func (service *Service) Upload(
 	ctx context.Context,
 	organizationID domain.OrganizationID,

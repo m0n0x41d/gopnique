@@ -6,18 +6,24 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/ivanzakutnii/error-tracker/internal/app/artifacts"
 	auditapp "github.com/ivanzakutnii/error-tracker/internal/app/audit"
+	"github.com/ivanzakutnii/error-tracker/internal/app/debugfiles"
 	dimensionapp "github.com/ivanzakutnii/error-tracker/internal/app/dimensions"
 	"github.com/ivanzakutnii/error-tracker/internal/app/health"
 	issueapp "github.com/ivanzakutnii/error-tracker/internal/app/issues"
 	memberapp "github.com/ivanzakutnii/error-tracker/internal/app/members"
+	"github.com/ivanzakutnii/error-tracker/internal/app/minidumps"
+	observabilityapp "github.com/ivanzakutnii/error-tracker/internal/app/observability"
 	"github.com/ivanzakutnii/error-tracker/internal/app/operators"
 	"github.com/ivanzakutnii/error-tracker/internal/app/outbound"
+	performanceapp "github.com/ivanzakutnii/error-tracker/internal/app/performance"
 	projectapp "github.com/ivanzakutnii/error-tracker/internal/app/projects"
 	settingsapp "github.com/ivanzakutnii/error-tracker/internal/app/settings"
 	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
 	statsapp "github.com/ivanzakutnii/error-tracker/internal/app/stats"
 	tokenapp "github.com/ivanzakutnii/error-tracker/internal/app/tokens"
+	uptimeapp "github.com/ivanzakutnii/error-tracker/internal/app/uptime"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/web/templates"
 )
@@ -32,17 +38,22 @@ type AuthSettings struct {
 }
 
 type IngestEnrichments struct {
+	ArtifactVault     artifacts.ArtifactVault
 	SourceMapResolver *sourcemaps.Service
+	DebugFileStore    *debugfiles.Service
+	MinidumpStore     *minidumps.Service
 }
 
 func New(
 	addr string,
-	probe health.DatabaseProbe,
+	probe observabilityapp.Reader,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
+	performanceReader performanceapp.Reader,
+	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -55,7 +66,7 @@ func New(
 ) *Server {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, auth),
+		Handler:           NewHandler(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, auth),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -63,12 +74,14 @@ func New(
 }
 
 func NewHandler(
-	probe health.DatabaseProbe,
+	probe observabilityapp.Reader,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
+	performanceReader performanceapp.Reader,
+	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -79,16 +92,40 @@ func NewHandler(
 	enrichments IngestEnrichments,
 	auth AuthSettings,
 ) http.Handler {
-	return newMux(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, NewSessionCodec(auth.SecretKey), auth)
+	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, uptimeManager, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, NewSessionCodec(auth.SecretKey), auth)
 }
 
 func newMux(
-	probe health.DatabaseProbe,
+	probe observabilityapp.Reader,
 	ingestBackend SentryIngestBackend,
 	issueManager issueapp.Manager,
 	userReportReader userreportapp.Reader,
 	dimensionReader dimensionapp.Reader,
 	statsReader statsapp.Reader,
+	performanceReader performanceapp.Reader,
+	projectReader projectapp.Reader,
+	memberReader memberapp.Reader,
+	settingsManager settingsapp.Manager,
+	tokenManager tokenapp.Manager,
+	auditReader auditapp.Reader,
+	resolver outbound.Resolver,
+	operatorAccess operators.Access,
+	enrichments IngestEnrichments,
+	sessions SessionCodec,
+	auth AuthSettings,
+) *http.ServeMux {
+	return newMuxWithUptime(probe, ingestBackend, issueManager, userReportReader, dimensionReader, statsReader, performanceReader, nil, projectReader, memberReader, settingsManager, tokenManager, auditReader, resolver, operatorAccess, enrichments, sessions, auth)
+}
+
+func newMuxWithUptime(
+	probe observabilityapp.Reader,
+	ingestBackend SentryIngestBackend,
+	issueManager issueapp.Manager,
+	userReportReader userreportapp.Reader,
+	dimensionReader dimensionapp.Reader,
+	statsReader statsapp.Reader,
+	performanceReader performanceapp.Reader,
+	uptimeManager uptimeapp.Manager,
 	projectReader projectapp.Reader,
 	memberReader memberapp.Reader,
 	settingsManager settingsapp.Manager,
@@ -102,18 +139,42 @@ func newMux(
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend, enrichments.SourceMapResolver))
-	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend, enrichments.SourceMapResolver))
+	mux.HandleFunc("POST /api/{project_ref}/store/", sentryStoreHandler(ingestBackend, enrichments))
+	mux.HandleFunc("POST /api/{project_ref}/envelope/", sentryEnvelopeHandler(ingestBackend, enrichments))
+	mux.HandleFunc("POST /api/{project_ref}/minidump/", sentryMinidumpHandler(ingestBackend, enrichments))
 	mux.HandleFunc("POST /api/{project_ref}/security/", sentrySecurityHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/csp-report/", sentrySecurityHandler(ingestBackend))
 	mux.HandleFunc("POST /api/{project_ref}/user-feedback/", sentryUserFeedbackHandler(ingestBackend))
+	mux.HandleFunc("POST /api/heartbeat/{endpoint_id}", heartbeatCheckInHandler(uptimeManager))
+	mux.HandleFunc("GET /api/0/organizations/{organization_slug}/chunk-upload/", artifactChunkUploadInfoHandler(tokenManager, projectReader, enrichments.ArtifactVault))
+	mux.HandleFunc("POST /api/0/organizations/{organization_slug}/chunk-upload/", artifactChunkUploadHandler(tokenManager, projectReader, enrichments.ArtifactVault))
+	mux.HandleFunc("POST /api/0/organizations/{organization_slug}/artifactbundle/assemble/", artifactBundleAssembleHandler(tokenManager, projectReader, enrichments.ArtifactVault, enrichments.SourceMapResolver))
+	mux.HandleFunc("POST /api/0/projects/{organization_slug}/{project_slug}/releases/{version}/files/", sourceMapUploadHandler(tokenManager, projectReader, enrichments.SourceMapResolver))
+	mux.HandleFunc("POST /api/0/projects/{organization_slug}/{project_slug}/files/difs/", debugFileUploadHandler(tokenManager, projectReader, enrichments.DebugFileStore))
+	mux.HandleFunc("POST /api/0/projects/{organization_slug}/{project_slug}/files/dsyms/", debugFileUploadHandler(tokenManager, projectReader, enrichments.DebugFileStore))
+	mux.HandleFunc("POST /api/0/projects/{organization_slug}/{project_slug}/files/difs/assemble/", debugFileAssembleHandler(tokenManager, projectReader, enrichments.ArtifactVault, enrichments.DebugFileStore))
+	mux.HandleFunc("POST /api/0/projects/{organization_slug}/{project_slug}/reprocessing/", debugFileReprocessingHandler(tokenManager, projectReader))
 	mux.HandleFunc("GET /api/v1/project", currentProjectAPIHandler(projectReader, tokenManager, auth))
+	mux.HandleFunc("GET /api/admin/observability", observabilitySnapshotHandler(probe, operatorAccess, sessions))
+	mux.HandleFunc("GET /api/admin/observability/system", observabilitySystemHandler(operatorAccess, sessions))
+	mux.HandleFunc("GET /api/admin/observability/readiness", observabilityReadinessHandler(probe, operatorAccess, sessions))
+	mux.HandleFunc("GET /api/admin/observability/migrations", observabilityMigrationHandler(probe, operatorAccess, sessions))
+	mux.HandleFunc("GET /api/admin/observability/queue", observabilityQueueHandler(probe, operatorAccess, sessions))
+	mux.HandleFunc("GET /api/admin/observability/metrics", observabilityMetricsHandler(probe, operatorAccess, sessions))
 	mux.HandleFunc("GET /setup", setupGetHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /setup", setupPostHandler(operatorAccess, sessions, auth))
 	mux.HandleFunc("GET /login", loginGetHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /login", loginPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("POST /logout", logoutPostHandler(operatorAccess, sessions))
 	mux.HandleFunc("GET /stats", projectStatsHandler(statsReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /performance", performanceListHandler(performanceReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /performance/{group_id}", performanceDetailHandler(performanceReader, operatorAccess, sessions))
+	mux.HandleFunc("GET /uptime", uptimeHandler(uptimeManager, operatorAccess, sessions))
+	mux.HandleFunc("POST /uptime/monitors", createHTTPMonitorHandler(uptimeManager, resolver, operatorAccess, sessions))
+	mux.HandleFunc("POST /uptime/heartbeats", createHeartbeatMonitorHandler(uptimeManager, operatorAccess, sessions))
+	mux.HandleFunc("POST /uptime/status-pages", createStatusPageHandler(uptimeManager, operatorAccess, sessions))
+	mux.HandleFunc("GET /status-pages/{page_id}", privateStatusPageHandler(uptimeManager, operatorAccess, sessions))
+	mux.HandleFunc("GET /status/{token}", publicStatusPageHandler(uptimeManager))
 	mux.HandleFunc("GET /issues", issueListHandler(issueManager, operatorAccess, sessions))
 	mux.HandleFunc("GET /issues/{issue_id}", issueDetailHandler(issueManager, userReportReader, operatorAccess, sessions))
 	mux.HandleFunc("POST /issues/{issue_id}/status", issueStatusHandler(issueManager, operatorAccess, sessions))

@@ -36,11 +36,13 @@ func TestPostgresRateLimitE2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 26 {
-		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 30 {
+		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
+		store,
 		store,
 		store,
 		store,

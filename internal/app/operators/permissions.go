@@ -15,6 +15,7 @@ const (
 	PermissionManageMembers Permission = "manage_members"
 	PermissionManageTokens  Permission = "manage_tokens"
 	PermissionViewAudit     Permission = "view_audit"
+	PermissionViewOps       Permission = "view_ops"
 )
 
 func RequirePermission(
@@ -43,7 +44,8 @@ func Can(session OperatorSession, permission Permission) bool {
 			permission == PermissionManageAlerts ||
 			permission == PermissionManageMembers ||
 			permission == PermissionManageTokens ||
-			permission == PermissionViewAudit
+			permission == PermissionViewAudit ||
+			permission == PermissionViewOps
 	}
 
 	if session.ProjectRole == "member" {
@@ -59,5 +61,6 @@ func (permission Permission) Valid() bool {
 		permission == PermissionManageAlerts ||
 		permission == PermissionManageMembers ||
 		permission == PermissionManageTokens ||
-		permission == PermissionViewAudit
+		permission == PermissionViewAudit ||
+		permission == PermissionViewOps
 }

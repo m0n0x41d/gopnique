@@ -72,7 +72,7 @@ func (store *Store) MigrationStatus(ctx context.Context) (health.MigrationStatus
 		return health.MigrationStatus{}, scanErr
 	}
 
-	status.Ready = status.AppliedCount >= 26
+	status.Ready = status.AppliedCount >= 30
 
 	return status, nil
 }
@@ -225,10 +225,11 @@ insert into events (
   received_at,
   release,
   environment,
+  transaction_name,
   fingerprint,
   canonical_payload
 ) values (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 )
 on conflict (project_id, event_id) do nothing
 `
@@ -252,6 +253,7 @@ on conflict (project_id, event_id) do nothing
 		canonical.ReceivedAt().Time(),
 		nullableText(canonical.Release()),
 		nullableText(canonical.Environment()),
+		nullableText(transactionName(canonical)),
 		event.Fingerprint().Value(),
 		payload,
 	)
@@ -271,6 +273,11 @@ on conflict (project_id, event_id) do nothing
 	tagsErr := store.insertEventTags(ctx, eventRowID, canonical)
 	if tagsErr != nil {
 		return result.Err[ingest.EventAppendResult](tagsErr)
+	}
+
+	transactionErr := store.insertTransactionEvent(ctx, eventRowID, canonical)
+	if transactionErr != nil {
+		return result.Err[ingest.EventAppendResult](transactionErr)
 	}
 
 	return result.Ok(ingest.NewAppendedEvent())
@@ -362,7 +369,80 @@ func canonicalPayloadJSON(event ingestplan.AcceptedEvent) ([]byte, error) {
 		payload["native"] = encoded
 	}
 
+	if encoded := encodeTransaction(canonical); encoded != nil {
+		payload["transaction"] = encoded
+	}
+
 	return json.Marshal(payload)
+}
+
+func transactionName(event domain.CanonicalEvent) string {
+	transaction, ok := event.Transaction()
+	if !ok {
+		return ""
+	}
+
+	return transaction.Name()
+}
+
+func encodeTransaction(event domain.CanonicalEvent) map[string]any {
+	transaction, ok := event.Transaction()
+	if !ok {
+		return nil
+	}
+
+	encoded := map[string]any{
+		"name":        transaction.Name(),
+		"operation":   transaction.Operation(),
+		"duration_ms": transaction.DurationMilliseconds(),
+		"status":      transaction.Status(),
+		"span_count":  transaction.SpanCount(),
+	}
+
+	if trace, hasTrace := transaction.Trace(); hasTrace {
+		encoded["trace"] = map[string]any{
+			"trace_id": trace.TraceID(),
+			"span_id":  trace.SpanID(),
+		}
+
+		if parentSpanID := trace.ParentSpanID(); parentSpanID != "" {
+			encoded["trace"].(map[string]any)["parent_span_id"] = parentSpanID
+		}
+	}
+
+	if spans := encodeTransactionSpans(transaction.Spans()); spans != nil {
+		encoded["spans"] = spans
+	}
+
+	return encoded
+}
+
+func encodeTransactionSpans(spans []domain.TransactionSpan) []map[string]any {
+	if len(spans) == 0 {
+		return nil
+	}
+
+	encoded := make([]map[string]any, 0, len(spans))
+	for _, span := range spans {
+		entry := map[string]any{
+			"span_id":     span.SpanID(),
+			"operation":   span.Operation(),
+			"duration_ms": span.DurationMilliseconds(),
+			"status":      span.Status(),
+		}
+
+		if parentSpanID := span.ParentSpanID(); parentSpanID != "" {
+			entry["parent_span_id"] = parentSpanID
+		}
+
+		if description := span.Description(); description != "" {
+			entry["description"] = description
+		}
+
+		encoded = append(encoded, entry)
+	}
+
+	return encoded
 }
 
 func encodeJsStacktrace(frames []domain.JsStacktraceFrame) []map[string]any {
@@ -481,6 +561,78 @@ on conflict (event_id, key) do update set value = excluded.value
 	}
 
 	return nil
+}
+
+func (store txStore) insertTransactionEvent(
+	ctx context.Context,
+	eventRowID string,
+	event domain.CanonicalEvent,
+) error {
+	transaction, ok := event.Transaction()
+	if !ok {
+		return nil
+	}
+
+	encodedSpans := encodeTransactionSpans(transaction.Spans())
+	if encodedSpans == nil {
+		encodedSpans = []map[string]any{}
+	}
+
+	spans, spansErr := json.Marshal(encodedSpans)
+	if spansErr != nil {
+		return spansErr
+	}
+
+	traceID := ""
+	spanID := ""
+	parentSpanID := ""
+	if trace, hasTrace := transaction.Trace(); hasTrace {
+		traceID = trace.TraceID()
+		spanID = trace.SpanID()
+		parentSpanID = trace.ParentSpanID()
+	}
+
+	query := `
+insert into transaction_events (
+  event_id,
+  organization_id,
+  project_id,
+  transaction_name,
+  operation,
+  duration_ms,
+  status,
+  trace_id,
+  span_id,
+  parent_span_id,
+  span_count,
+  spans,
+  occurred_at,
+  received_at
+) values (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12::jsonb, '[]'::jsonb), $13, $14
+)
+on conflict (event_id) do nothing
+`
+	_, execErr := store.tx.Exec(
+		ctx,
+		query,
+		eventRowID,
+		event.OrganizationID().String(),
+		event.ProjectID().String(),
+		transaction.Name(),
+		transaction.Operation(),
+		transaction.DurationMilliseconds(),
+		transaction.Status(),
+		nullableText(traceID),
+		nullableText(spanID),
+		nullableText(parentSpanID),
+		transaction.SpanCount(),
+		spans,
+		event.OccurredAt().Time(),
+		event.ReceivedAt().Time(),
+	)
+
+	return execErr
 }
 
 func boolInt(value bool) int {

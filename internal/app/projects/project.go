@@ -27,6 +27,7 @@ type ProjectQuery struct {
 }
 
 type ProjectRecord struct {
+	OrganizationSlug string
 	OrganizationName string
 	ProjectID        domain.ProjectID
 	Name             string

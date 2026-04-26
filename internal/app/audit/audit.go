@@ -31,6 +31,9 @@ const (
 	ActionIssueAssigned       Action = "issue_assigned"
 	ActionIssueCommentCreated Action = "issue_comment_created"
 	ActionIssueStatusChanged  Action = "issue_status_changed"
+	ActionMonitorCreated      Action = "monitor_created"
+	ActionMonitorStateChanged Action = "monitor_state_changed"
+	ActionStatusPageCreated   Action = "status_page_created"
 )
 
 type View struct {
@@ -68,5 +71,8 @@ func (action Action) Valid() bool {
 		action == ActionAPITokenRevoked ||
 		action == ActionIssueAssigned ||
 		action == ActionIssueCommentCreated ||
-		action == ActionIssueStatusChanged
+		action == ActionIssueStatusChanged ||
+		action == ActionMonitorCreated ||
+		action == ActionMonitorStateChanged ||
+		action == ActionStatusPageCreated
 }

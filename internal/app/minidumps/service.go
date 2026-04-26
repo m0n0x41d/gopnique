@@ -59,6 +59,10 @@ func NewService(vault artifacts.ArtifactVault) (*Service, error) {
 	return &Service{vault: vault}, nil
 }
 
+func MaxUploadBytes() int64 {
+	return minidumpMaxBytes
+}
+
 func (service *Service) Upload(
 	ctx context.Context,
 	organizationID domain.OrganizationID,
@@ -135,6 +139,25 @@ func (service *Service) Get(
 	}
 
 	return result.Ok(body)
+}
+
+func (service *Service) Delete(
+	ctx context.Context,
+	organizationID domain.OrganizationID,
+	projectID domain.ProjectID,
+	identity domain.MinidumpIdentity,
+) result.Result[struct{}] {
+	key, keyErr := domain.NewArtifactKey(
+		organizationID,
+		projectID,
+		domain.ArtifactKindMinidump(),
+		identity.ArtifactName(),
+	)
+	if keyErr != nil {
+		return result.Err[struct{}](keyErr)
+	}
+
+	return service.vault.DeleteArtifact(ctx, key)
 }
 
 func (service *Service) List(

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -158,6 +159,131 @@ func TestIngestCanonicalEventDoesNotEnqueueForExistingIssue(t *testing.T) {
 
 	if ports.enqueued {
 		t.Fatal("did not expect issue opened enqueue")
+	}
+}
+
+func TestIngestCanonicalEventWithAppendEffectRunsBeforeIssuePlan(t *testing.T) {
+	ports := &fakePorts{
+		issueID:      issueID(t),
+		issueCreated: true,
+	}
+	transaction := fakeTransaction{ports: ports}
+	command := NewIngestCommand(issueEvent(t))
+	effectCalls := 0
+	effectSawAppend := false
+	effectSawApply := false
+
+	effect := func(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}] {
+		effectCalls++
+		effectSawAppend = ports.appended
+		effectSawApply = ports.applied
+		return result.Ok(struct{}{})
+	}
+
+	receiptResult := IngestCanonicalEventWithAppendEffect(context.Background(), command, transaction, effect)
+	receipt, receiptErr := receiptResult.Value()
+	if receiptErr != nil {
+		t.Fatalf("ingest receipt: %v", receiptErr)
+	}
+
+	if receipt.Kind() != ReceiptAcceptedIssueEvent {
+		t.Fatalf("unexpected receipt kind: %s", receipt.Kind())
+	}
+
+	if effectCalls != 1 {
+		t.Fatalf("expected one append effect call, got %d", effectCalls)
+	}
+
+	if !effectSawAppend {
+		t.Fatal("expected append effect to run after event append")
+	}
+
+	if effectSawApply {
+		t.Fatal("expected append effect to run before issue apply")
+	}
+
+	if !ports.applied {
+		t.Fatal("expected issue plan apply after append effect")
+	}
+}
+
+func TestIngestCanonicalEventWithAppendEffectSkipsDuplicateAndQuotaRejection(t *testing.T) {
+	tests := []struct {
+		name  string
+		ports *fakePorts
+	}{
+		{
+			name: "duplicate exists",
+			ports: &fakePorts{
+				exists:  true,
+				issueID: issueID(t),
+			},
+		},
+		{
+			name: "append duplicate",
+			ports: &fakePorts{
+				appendDuplicate: true,
+				issueID:         issueID(t),
+			},
+		},
+		{
+			name: "quota rejected",
+			ports: &fakePorts{
+				quota:   NewQuotaRejected("project_quota_exceeded"),
+				issueID: issueID(t),
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transaction := fakeTransaction{ports: tc.ports}
+			command := NewIngestCommand(issueEvent(t))
+			effectCalls := 0
+
+			effect := func(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}] {
+				effectCalls++
+				return result.Ok(struct{}{})
+			}
+
+			receiptResult := IngestCanonicalEventWithAppendEffect(context.Background(), command, transaction, effect)
+			_, receiptErr := receiptResult.Value()
+			if receiptErr != nil {
+				t.Fatalf("ingest receipt: %v", receiptErr)
+			}
+
+			if effectCalls != 0 {
+				t.Fatalf("expected no append effect calls, got %d", effectCalls)
+			}
+		})
+	}
+}
+
+func TestIngestCanonicalEventWithAppendEffectStopsOnEffectError(t *testing.T) {
+	ports := &fakePorts{
+		issueID:      issueID(t),
+		issueCreated: true,
+	}
+	transaction := fakeTransaction{ports: ports}
+	command := NewIngestCommand(issueEvent(t))
+	expectedErr := errors.New("artifact upload failed")
+
+	effect := func(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}] {
+		return result.Err[struct{}](expectedErr)
+	}
+
+	receiptResult := IngestCanonicalEventWithAppendEffect(context.Background(), command, transaction, effect)
+	_, receiptErr := receiptResult.Value()
+	if !errors.Is(receiptErr, expectedErr) {
+		t.Fatalf("expected effect error, got %v", receiptErr)
+	}
+
+	if !ports.appended {
+		t.Fatal("expected event append before effect")
+	}
+
+	if ports.applied || ports.enqueued {
+		t.Fatalf("effect failure must stop downstream changes: %#v", ports)
 	}
 }
 

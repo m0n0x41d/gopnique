@@ -17,6 +17,7 @@ import (
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/filesystem"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/googlechat"
 	httpadapter "github.com/ivanzakutnii/error-tracker/internal/adapters/http"
+	"github.com/ivanzakutnii/error-tracker/internal/adapters/httpprobe"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/netresolver"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/ntfy"
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/postgres"
@@ -88,6 +89,8 @@ func runServer(env []string, stdout io.Writer, stderr io.Writer, mode config.Mod
 
 	server := httpadapter.New(
 		cfg.HTTPAddr,
+		store,
+		store,
 		store,
 		store,
 		store,
@@ -184,6 +187,8 @@ func runAllInOne(env []string, stdout io.Writer, stderr io.Writer) int {
 		store,
 		store,
 		store,
+		store,
+		store,
 		netresolver.New(nil),
 		store,
 		enrichments,
@@ -229,7 +234,22 @@ func buildIngestEnrichments(cfg config.Config) (httpadapter.IngestEnrichments, e
 		return httpadapter.IngestEnrichments{}, resolverErr
 	}
 
-	return httpadapter.IngestEnrichments{SourceMapResolver: resolver}, nil
+	minidumpStore, minidumpErr := minidumps.NewService(vault)
+	if minidumpErr != nil {
+		return httpadapter.IngestEnrichments{}, minidumpErr
+	}
+
+	debugFileStore, debugFileErr := debugfiles.NewService(vault)
+	if debugFileErr != nil {
+		return httpadapter.IngestEnrichments{}, debugFileErr
+	}
+
+	return httpadapter.IngestEnrichments{
+		ArtifactVault:     vault,
+		SourceMapResolver: resolver,
+		DebugFileStore:    debugFileStore,
+		MinidumpStore:     minidumpStore,
+	}, nil
 }
 
 func runMigrate(args []string, env []string, stdout io.Writer, stderr io.Writer) int {
@@ -1061,6 +1081,13 @@ func newWorker(cfg config.Config, store *postgres.Store) (worker.Worker, error) 
 	tasks = append(tasks, worker.NewRetentionTask(
 		store,
 		worker.RetentionTaskConfig{BatchSize: cfg.RetentionBatchSize},
+	))
+
+	tasks = append(tasks, worker.NewUptimeTask(
+		store,
+		resolver,
+		httpprobe.NewDefault(),
+		worker.UptimeTaskConfig{BatchSize: cfg.NotificationBatchSize},
 	))
 
 	return worker.New(tasks...), nil

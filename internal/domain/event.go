@@ -46,6 +46,7 @@ type CanonicalEventParams struct {
 	JsStacktrace         []JsStacktraceFrame
 	NativeModules        []NativeModule
 	NativeFrames         []NativeFrame
+	Transaction          TransactionData
 }
 
 type CanonicalEvent struct {
@@ -67,6 +68,8 @@ type CanonicalEvent struct {
 	jsStacktrace         []JsStacktraceFrame
 	nativeModules        []NativeModule
 	nativeFrames         []NativeFrame
+	transaction          TransactionData
+	hasTransaction       bool
 }
 
 func NewEventTitle(input string) (EventTitle, error) {
@@ -131,6 +134,11 @@ func NewCanonicalEvent(params CanonicalEventParams) (CanonicalEvent, error) {
 		defaultParts = []string{params.Title.value}
 	}
 
+	transaction, hasTransaction, transactionErr := canonicalTransaction(params)
+	if transactionErr != nil {
+		return CanonicalEvent{}, transactionErr
+	}
+
 	return CanonicalEvent{
 		organizationID:       params.OrganizationID,
 		projectID:            params.ProjectID,
@@ -150,6 +158,8 @@ func NewCanonicalEvent(params CanonicalEventParams) (CanonicalEvent, error) {
 		jsStacktrace:         copyJsStacktraceFrames(params.JsStacktrace),
 		nativeModules:        copyNativeModules(params.NativeModules),
 		nativeFrames:         copyNativeFrames(params.NativeFrames),
+		transaction:          transaction,
+		hasTransaction:       hasTransaction,
 	}, nil
 }
 
@@ -257,6 +267,45 @@ func (event CanonicalEvent) NativeModules() []NativeModule {
 
 func (event CanonicalEvent) NativeFrames() []NativeFrame {
 	return copyNativeFrames(event.nativeFrames)
+}
+
+func (event CanonicalEvent) WithNativeFrames(frames []NativeFrame) CanonicalEvent {
+	updated := event
+	updated.nativeFrames = copyNativeFrames(frames)
+	return updated
+}
+
+func (event CanonicalEvent) Transaction() (TransactionData, bool) {
+	return copyTransactionData(event.transaction), event.hasTransaction
+}
+
+func canonicalTransaction(params CanonicalEventParams) (TransactionData, bool, error) {
+	hasTransaction := params.Transaction.name != ""
+
+	if params.Kind != EventKindTransaction && hasTransaction {
+		return TransactionData{}, false, errors.New("transaction data is only valid for transaction events")
+	}
+
+	if params.Kind != EventKindTransaction {
+		return TransactionData{}, false, nil
+	}
+
+	if hasTransaction {
+		return copyTransactionData(params.Transaction), true, nil
+	}
+
+	transaction, transactionErr := NewTransactionData(
+		params.Title.value,
+		"default",
+		0,
+		"unknown",
+		nil,
+	)
+	if transactionErr != nil {
+		return TransactionData{}, false, transactionErr
+	}
+
+	return transaction, true, nil
 }
 
 func normalizeParts(parts []string) []string {

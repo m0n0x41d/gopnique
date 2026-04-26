@@ -340,6 +340,91 @@ func TestCanonicalPayloadJSONIncludesAttachmentsWhenPresent(t *testing.T) {
 	}
 }
 
+func TestCanonicalPayloadJSONIncludesTransactionTelemetryWhenPresent(t *testing.T) {
+	trace, traceErr := domain.NewTransactionTraceContext(
+		"0123456789abcdef0123456789abcdef",
+		"1111111111111111",
+		"2222222222222222",
+	)
+	if traceErr != nil {
+		t.Fatalf("trace: %v", traceErr)
+	}
+
+	span, spanErr := domain.NewTransactionSpan(
+		"3333333333333333",
+		"1111111111111111",
+		"db",
+		"select checkout",
+		100*time.Millisecond,
+		"ok",
+	)
+	if spanErr != nil {
+		t.Fatalf("span: %v", spanErr)
+	}
+
+	transaction, transactionErr := domain.NewTransactionDataWithTrace(
+		"GET /checkout",
+		"http.server",
+		1500*time.Millisecond,
+		"ok",
+		trace,
+		[]domain.TransactionSpan{span},
+	)
+	if transactionErr != nil {
+		t.Fatalf("transaction: %v", transactionErr)
+	}
+
+	accepted := mustAcceptedEventWith(t, domain.CanonicalEventParams{
+		Kind:        domain.EventKindTransaction,
+		Level:       domain.EventLevelInfo,
+		Title:       mustStoreTitle(t, "GET /checkout"),
+		Transaction: transaction,
+	})
+
+	payload, err := canonicalPayloadJSON(accepted)
+	if err != nil {
+		t.Fatalf("canonical payload: %v", err)
+	}
+
+	decoded := decodeCanonicalPayload(t, payload)
+	rawTransaction, present := decoded["transaction"]
+	if !present {
+		t.Fatalf("expected transaction key in payload")
+	}
+
+	transactionObject, ok := rawTransaction.(map[string]any)
+	if !ok {
+		t.Fatalf("expected transaction object, got %T", rawTransaction)
+	}
+
+	if transactionObject["name"] != "GET /checkout" ||
+		transactionObject["operation"] != "http.server" ||
+		transactionObject["status"] != "ok" ||
+		transactionObject["duration_ms"].(float64) != 1500 {
+		t.Fatalf("unexpected transaction object: %#v", transactionObject)
+	}
+
+	traceObject, ok := transactionObject["trace"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected trace object, got %T", transactionObject["trace"])
+	}
+
+	if traceObject["trace_id"] != "0123456789abcdef0123456789abcdef" ||
+		traceObject["span_id"] != "1111111111111111" ||
+		traceObject["parent_span_id"] != "2222222222222222" {
+		t.Fatalf("unexpected trace object: %#v", traceObject)
+	}
+
+	spans, ok := transactionObject["spans"].([]any)
+	if !ok {
+		t.Fatalf("expected spans array, got %T", transactionObject["spans"])
+	}
+
+	if len(spans) != 1 {
+		t.Fatalf("expected one span, got %d", len(spans))
+	}
+}
+
 func mustAcceptedEvent(t *testing.T, attachments []domain.EventAttachment) ingestplan.AcceptedEvent {
 	t.Helper()
 
@@ -381,20 +466,35 @@ func mustAcceptedEventWith(t *testing.T, overrides domain.CanonicalEventParams) 
 		t.Fatalf("event title: %v", titleErr)
 	}
 
+	if overrides.Title.String() != "" {
+		title = overrides.Title
+	}
+
+	kind := domain.EventKindError
+	if overrides.Kind != "" {
+		kind = overrides.Kind
+	}
+
+	level := domain.EventLevelError
+	if overrides.Level != "" {
+		level = overrides.Level
+	}
+
 	params := domain.CanonicalEventParams{
 		OrganizationID: organizationID,
 		ProjectID:      projectID,
 		EventID:        eventID,
 		OccurredAt:     occurredAt,
 		ReceivedAt:     receivedAt,
-		Kind:           domain.EventKindError,
-		Level:          domain.EventLevelError,
+		Kind:           kind,
+		Level:          level,
 		Title:          title,
 		Platform:       "javascript",
 		Attachments:    overrides.Attachments,
 		JsStacktrace:   overrides.JsStacktrace,
 		NativeModules:  overrides.NativeModules,
 		NativeFrames:   overrides.NativeFrames,
+		Transaction:    overrides.Transaction,
 	}
 
 	canonical, eventErr := domain.NewCanonicalEvent(params)
@@ -417,6 +517,17 @@ func mustAcceptedEventWith(t *testing.T, overrides domain.CanonicalEventParams) 
 	}
 
 	return accepted
+}
+
+func mustStoreTitle(t *testing.T, input string) domain.EventTitle {
+	t.Helper()
+
+	title, err := domain.NewEventTitle(input)
+	if err != nil {
+		t.Fatalf("event title: %v", err)
+	}
+
+	return title
 }
 
 func mustArtifactName(t *testing.T, input string) domain.ArtifactName {

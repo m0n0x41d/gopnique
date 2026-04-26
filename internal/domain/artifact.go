@@ -39,6 +39,10 @@ func ArtifactKindAttachment() ArtifactKind {
 	return ArtifactKind{value: "attachment"}
 }
 
+func ArtifactKindUploadChunk() ArtifactKind {
+	return ArtifactKind{value: "upload_chunk"}
+}
+
 func ParseArtifactKind(input string) (ArtifactKind, error) {
 	value := strings.TrimSpace(strings.ToLower(input))
 
@@ -51,6 +55,8 @@ func ParseArtifactKind(input string) (ArtifactKind, error) {
 		return ArtifactKindMinidump(), nil
 	case "attachment":
 		return ArtifactKindAttachment(), nil
+	case "upload_chunk":
+		return ArtifactKindUploadChunk(), nil
 	default:
 		return ArtifactKind{}, errors.New("artifact kind is invalid")
 	}

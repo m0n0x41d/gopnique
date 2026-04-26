@@ -53,13 +53,15 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	if migrationErr != nil {
 		t.Fatalf("migrate: %v", migrationErr)
 	}
-	if len(migrationResult.Applied) != 26 {
-		t.Fatalf("expected 26 migrations, got %d", len(migrationResult.Applied))
+	if len(migrationResult.Applied) != 30 {
+		t.Fatalf("expected 30 migrations, got %d", len(migrationResult.Applied))
 	}
 
 	publicURL := "http://example.test"
 	resolver := e2eResolver{"hooks.example.test": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
 	server := httptest.NewServer(httpadapter.NewHandler(
+		store,
+		store,
 		store,
 		store,
 		store,
@@ -192,6 +194,14 @@ func TestPostgresM1M2E2E(t *testing.T) {
 		t.Fatalf("expected envelope dsn ok, got %d: %s", envelopeDSN.StatusCode, envelopeDSN.Body)
 	}
 
+	transactionReceipt := postTransactionEnvelope(t, client, server.URL, publicKey)
+	if transactionReceipt.StatusCode != http.StatusOK {
+		t.Fatalf("expected transaction envelope ok, got %d: %s", transactionReceipt.StatusCode, transactionReceipt.Body)
+	}
+	if !strings.Contains(transactionReceipt.Body, `"id":"910e8400e29b41d4a716446655440000"`) {
+		t.Fatalf("unexpected transaction receipt: %s", transactionReceipt.Body)
+	}
+
 	conflict := postConflictingEnvelope(t, client, server.URL, publicKey)
 	if conflict.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected auth conflict forbidden, got %d", conflict.StatusCode)
@@ -214,6 +224,9 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	}
 	if strings.Contains(issues.Body, "tenant leak sentinel") {
 		t.Fatal("tenant sentinel leaked into scoped issue list")
+	}
+	if strings.Contains(issues.Body, "GET /checkout") {
+		t.Fatalf("transaction leaked into issue list: %s", issues.Body)
 	}
 
 	issueID := issueIDForEvent(t, ctx, databaseURL, "980e8400-e29b-41d4-a716-446655440000")
@@ -252,6 +265,7 @@ func TestPostgresM1M2E2E(t *testing.T) {
 	postFeedbackEnvelope(t, client, server.URL, publicKey)
 	assertUserReportVisible(t, client, server.URL, issueID)
 	assertProjectStatsPage(t, client, server.URL)
+	assertPerformancePages(t, ctx, databaseURL, client, server.URL)
 	addIssueCommentThroughUI(t, client, server.URL, issueID, "E2E operator comment")
 	assertIssueCommentVisible(t, client, server.URL, issueID, "E2E operator comment")
 	teamID := assignIssueThroughUI(t, ctx, databaseURL, client, server.URL, issueID)
@@ -971,6 +985,7 @@ func assertProjectStatsPage(
 		"Project telemetry",
 		"Events",
 		"issue 3",
+		"transaction 1",
 		"1<span class=\"unit\">reports</span>",
 		"Trend by hour",
 	} {
@@ -985,6 +1000,51 @@ func assertProjectStatsPage(
 	}
 	if !strings.Contains(daily.Body, "Trend by day") {
 		t.Fatalf("expected daily stats page: %s", daily.Body)
+	}
+}
+
+func assertPerformancePages(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	client *http.Client,
+	baseURL string,
+) {
+	t.Helper()
+
+	list := request(t, client, http.MethodGet, baseURL+"/performance", "", nil)
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("expected performance ok, got %d: %s", list.StatusCode, list.Body)
+	}
+
+	for _, expected := range []string{
+		"Transactions",
+		"GET /checkout",
+		"http.server",
+		"1.50s",
+		"ok",
+	} {
+		if !strings.Contains(list.Body, expected) {
+			t.Fatalf("expected performance list to contain %q: %s", expected, list.Body)
+		}
+	}
+
+	groupID := transactionGroupIDForEvent(t, ctx, databaseURL, "910e8400-e29b-41d4-a716-446655440000")
+	detail := request(t, client, http.MethodGet, baseURL+"/performance/"+groupID, "", nil)
+	if detail.StatusCode != http.StatusOK {
+		t.Fatalf("expected performance detail ok, got %d: %s", detail.StatusCode, detail.Body)
+	}
+
+	for _, expected := range []string{
+		"Recent events",
+		"910e8400-e29b-41d4-a716-446655440000",
+		"0123456789abcdef0123456789abcdef",
+		"1111111111111111",
+		"1<span class=\"unit\">events</span>",
+	} {
+		if !strings.Contains(detail.Body, expected) {
+			t.Fatalf("expected performance detail to contain %q: %s", expected, detail.Body)
+		}
 	}
 }
 
@@ -1818,6 +1878,35 @@ where e.event_id = $1
 	return issueID
 }
 
+func transactionGroupIDForEvent(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	eventID string,
+) string {
+	t.Helper()
+
+	pool, poolErr := pgxpool.New(ctx, databaseURL)
+	if poolErr != nil {
+		t.Fatalf("pool: %v", poolErr)
+	}
+	defer pool.Close()
+
+	query := `
+select fingerprint
+from events
+where event_id = $1
+  and kind = 'transaction'
+`
+	var groupID string
+	scanErr := pool.QueryRow(ctx, query, eventID).Scan(&groupID)
+	if scanErr != nil {
+		t.Fatalf("transaction group id for event: %v", scanErr)
+	}
+
+	return groupID
+}
+
 func addTelegramDestination(t *testing.T, ctx context.Context, store *postgres.Store) string {
 	t.Helper()
 
@@ -1922,6 +2011,58 @@ func postEnvelopeDSN(
 		fmt.Sprintf(`{"dsn":"http://%s@example.test/1","event_id":"990e8400e29b41d4a716446655440000"}`, publicKey),
 		`{"type":"event"}`,
 		`{"event_id":"990e8400e29b41d4a716446655440000","timestamp":"2026-04-24T13:01:00Z","level":"warning","message":"envelope dsn auth visible issue"}`,
+	}, "\n")
+
+	return request(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/1/envelope/",
+		"application/x-sentry-envelope",
+		strings.NewReader(body),
+	)
+}
+
+func postTransactionEnvelope(
+	t *testing.T,
+	client *http.Client,
+	baseURL string,
+	publicKey string,
+) responseSnapshot {
+	t.Helper()
+
+	payload := strings.Join([]string{
+		`{`,
+		`"event_id":"910e8400e29b41d4a716446655440000",`,
+		`"type":"transaction",`,
+		`"transaction":"GET /checkout",`,
+		`"start_timestamp":"2026-04-24T13:03:00Z",`,
+		`"timestamp":"2026-04-24T13:03:01.500Z",`,
+		`"platform":"javascript",`,
+		`"release":"web@1.2.3",`,
+		`"environment":"production",`,
+		`"contexts":{"trace":{`,
+		`"trace_id":"0123456789abcdef0123456789abcdef",`,
+		`"span_id":"1111111111111111",`,
+		`"parent_span_id":"2222222222222222",`,
+		`"op":"http.server",`,
+		`"status":"ok"`,
+		`}},`,
+		`"spans":[{`,
+		`"span_id":"3333333333333333",`,
+		`"parent_span_id":"1111111111111111",`,
+		`"op":"db",`,
+		`"description":"select checkout",`,
+		`"start_timestamp":"2026-04-24T13:03:00.250Z",`,
+		`"timestamp":"2026-04-24T13:03:00.350Z",`,
+		`"status":"ok"`,
+		`}]`,
+		`}`,
+	}, "")
+	body := strings.Join([]string{
+		fmt.Sprintf(`{"dsn":"http://%s@example.test/1","event_id":"910e8400e29b41d4a716446655440000"}`, publicKey),
+		fmt.Sprintf(`{"type":"transaction","length":%d}`, len(payload)),
+		payload,
 	}, "\n")
 
 	return request(

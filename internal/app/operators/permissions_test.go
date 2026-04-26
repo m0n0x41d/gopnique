@@ -58,6 +58,18 @@ func TestPermissionTable(t *testing.T) {
 			allowed:    false,
 		},
 		{
+			name:       "project admin can view ops",
+			session:    OperatorSession{ProjectRole: "admin"},
+			permission: PermissionViewOps,
+			allowed:    true,
+		},
+		{
+			name:       "project member cannot view ops",
+			session:    OperatorSession{ProjectRole: "member"},
+			permission: PermissionViewOps,
+			allowed:    false,
+		},
+		{
 			name:       "missing role cannot read",
 			session:    OperatorSession{},
 			permission: PermissionReadProject,

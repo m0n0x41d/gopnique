@@ -41,8 +41,8 @@ func ApplyToCanonicalEvent(
 		return event
 	}
 
-	dist, distErr := domain.NewOptionalDistName("")
-	if distErr != nil {
+	dist, hasDist := sourceMapDistFromCanonicalEvent(event)
+	if !hasDist {
 		return event
 	}
 
@@ -124,6 +124,41 @@ func resolveSingleFrame(
 	}
 
 	return resolved, true
+}
+
+func sourceMapDistFromCanonicalEvent(event domain.CanonicalEvent) (domain.DistName, bool) {
+	tags := event.Tags()
+	candidate, hasCandidate := firstDistTag(tags)
+	if !hasCandidate {
+		dist, distErr := domain.NewOptionalDistName("")
+		if distErr != nil {
+			return domain.DistName{}, false
+		}
+
+		return dist, true
+	}
+
+	dist, distErr := domain.NewOptionalDistName(candidate)
+	if distErr != nil {
+		return domain.DistName{}, false
+	}
+
+	return dist, true
+}
+
+func firstDistTag(tags map[string]string) (string, bool) {
+	keys := []string{"dist", "sentry.dist", "sentry_dist"}
+
+	for _, key := range keys {
+		value := strings.TrimSpace(tags[key])
+		if value == "" {
+			continue
+		}
+
+		return value, true
+	}
+
+	return "", false
 }
 
 // sourceMapFileNameFromAbsPath maps a JS frame abs_path to a source map

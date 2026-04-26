@@ -81,6 +81,7 @@ func TestParseStoreEventCarriesReleaseEnvironmentAndTags(t *testing.T) {
 			"level": "error",
 			"message": "hello",
 			"release": "api@1.2.3",
+			"dist": "web",
 			"environment": "production",
 			"server_name": "api-1",
 			"tags": [["region", "eu"], ["tier", "api"]]
@@ -100,8 +101,30 @@ func TestParseStoreEventCarriesReleaseEnvironmentAndTags(t *testing.T) {
 	}
 
 	tags := event.Tags()
-	if tags["region"] != "eu" || tags["tier"] != "api" || tags["server_name"] != "api-1" {
+	if tags["region"] != "eu" ||
+		tags["tier"] != "api" ||
+		tags["server_name"] != "api-1" ||
+		tags["dist"] != "web" {
 		t.Fatalf("unexpected tags: %#v", tags)
+	}
+}
+
+func TestParseStoreEventRejectsInvalidTopLevelDist(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"level": "error",
+			"message": "hello",
+			"release": "api@1.2.3",
+			"dist": "\u0001"
+		}`),
+	)
+	_, eventErr := eventResult.Value()
+	if eventErr == nil {
+		t.Fatal("expected invalid dist to fail")
 	}
 }
 
@@ -439,6 +462,206 @@ func TestParseStoreEventOmitsJsStacktraceForTransactionEvent(t *testing.T) {
 
 	if frames := event.JsStacktrace(); len(frames) != 0 {
 		t.Fatalf("expected transaction event to omit js stacktrace frames, got %d", len(frames))
+	}
+}
+
+func TestParseStoreEventPopulatesTransactionTelemetry(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 3, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"type": "transaction",
+			"transaction": "GET /checkout",
+			"start_timestamp": "2026-04-24T10:00:00Z",
+			"timestamp": "2026-04-24T10:00:01.500Z",
+			"platform": "javascript",
+			"release": "web@1.2.3",
+			"environment": "production",
+			"contexts": {
+				"trace": {
+					"trace_id": "0123456789abcdef0123456789abcdef",
+					"span_id": "1111111111111111",
+					"parent_span_id": "2222222222222222",
+					"op": "http.server",
+					"status": "ok"
+				}
+			},
+			"spans": [{
+				"span_id": "3333333333333333",
+				"parent_span_id": "1111111111111111",
+				"op": "db",
+				"description": "select checkout",
+				"start_timestamp": "2026-04-24T10:00:00.250Z",
+				"timestamp": "2026-04-24T10:00:00.350Z",
+				"status": "ok"
+			}]
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	if event.Kind() != domain.EventKindTransaction {
+		t.Fatalf("unexpected kind: %s", event.Kind())
+	}
+
+	transaction, ok := event.Transaction()
+	if !ok {
+		t.Fatal("expected transaction telemetry")
+	}
+
+	if transaction.Name() != "GET /checkout" ||
+		transaction.Operation() != "http.server" ||
+		transaction.Status() != "ok" {
+		t.Fatalf("unexpected transaction: %#v", transaction)
+	}
+
+	if transaction.DurationMilliseconds() != 1500 {
+		t.Fatalf("unexpected duration: %f", transaction.DurationMilliseconds())
+	}
+
+	trace, traceOK := transaction.Trace()
+	if !traceOK {
+		t.Fatal("expected trace context")
+	}
+
+	if trace.TraceID() != "0123456789abcdef0123456789abcdef" ||
+		trace.SpanID() != "1111111111111111" ||
+		trace.ParentSpanID() != "2222222222222222" {
+		t.Fatalf("unexpected trace: %#v", trace)
+	}
+
+	spans := transaction.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("expected one span, got %d", len(spans))
+	}
+
+	if spans[0].SpanID() != "3333333333333333" ||
+		spans[0].Operation() != "db" ||
+		spans[0].DurationMilliseconds() != 100 {
+		t.Fatalf("unexpected span: %#v", spans[0])
+	}
+}
+
+func TestParseStoreEventRejectsNegativeTransactionDuration(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"type": "transaction",
+			"transaction": "GET /checkout",
+			"start_timestamp": "2026-04-24T10:00:02Z",
+			"timestamp": "2026-04-24T10:00:01Z"
+		}`),
+	)
+	_, eventErr := eventResult.Value()
+	if eventErr == nil {
+		t.Fatal("expected negative transaction duration to fail")
+	}
+}
+
+func TestParseStoreEventPopulatesNativeModulesAndFrames(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "native",
+			"level": "fatal",
+			"debug_meta": {
+				"images": [{
+					"debug_id": "deadbeef-cafe-f00d-dead-beefcafef00d",
+					"code_file": "/usr/lib/libapp.so",
+					"image_addr": "0x10000000",
+					"image_size": "0x2000"
+				}]
+			},
+			"exception": {
+				"values": [{
+					"type": "SIGSEGV",
+					"value": "segmentation fault",
+					"stacktrace": {
+						"frames": [{
+							"instruction_addr": "0x10001004",
+							"package": "/usr/lib/libapp.so"
+						}]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	modules := event.NativeModules()
+	if len(modules) != 1 {
+		t.Fatalf("expected one native module, got %d", len(modules))
+	}
+
+	if modules[0].DebugID().String() != "deadbeefcafef00ddeadbeefcafef00d" {
+		t.Fatalf("unexpected module debug id: %s", modules[0].DebugID().String())
+	}
+
+	if modules[0].CodeFile() != "/usr/lib/libapp.so" {
+		t.Fatalf("unexpected module code file: %s", modules[0].CodeFile())
+	}
+
+	if modules[0].ImageAddr() != 0x10000000 || modules[0].ImageSize() != 0x2000 {
+		t.Fatalf("unexpected module range: addr=%x size=%x", modules[0].ImageAddr(), modules[0].ImageSize())
+	}
+
+	frames := event.NativeFrames()
+	if len(frames) != 1 {
+		t.Fatalf("expected one native frame, got %d", len(frames))
+	}
+
+	debugID, hasModule := frames[0].ModuleDebugID()
+	if !hasModule {
+		t.Fatal("expected frame module reference")
+	}
+
+	if debugID.String() != modules[0].DebugID().String() {
+		t.Fatalf("unexpected frame module debug id: %s", debugID.String())
+	}
+
+	if frames[0].InstructionAddr() != 0x10001004 {
+		t.Fatalf("unexpected instruction address: %x", frames[0].InstructionAddr())
+	}
+}
+
+func TestParseStoreEventSkipsNativeFramesWithoutInstructionAddress(t *testing.T) {
+	eventResult := ParseStoreEvent(
+		projectContext(t),
+		timePoint(t, time.Date(2026, 4, 24, 10, 0, 1, 0, time.UTC)),
+		[]byte(`{
+			"event_id": "550e8400e29b41d4a716446655440000",
+			"timestamp": "2026-04-24T10:00:00Z",
+			"platform": "native",
+			"level": "fatal",
+			"exception": {
+				"values": [{
+					"type": "SIGSEGV",
+					"value": "segmentation fault",
+					"stacktrace": {
+						"frames": [{"function": "missing_addr"}]
+					}
+				}]
+			}
+		}`),
+	)
+	event, eventErr := eventResult.Value()
+	if eventErr != nil {
+		t.Fatalf("parse store event: %v", eventErr)
+	}
+
+	if frames := event.NativeFrames(); len(frames) != 0 {
+		t.Fatalf("expected invalid native frame to be skipped, got %d", len(frames))
 	}
 }
 

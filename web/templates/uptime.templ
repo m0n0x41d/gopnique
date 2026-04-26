@@ -1,0 +1,324 @@
+package templates
+
+import (
+	"fmt"
+
+	uptimeapp "github.com/ivanzakutnii/error-tracker/internal/app/uptime"
+)
+
+type UptimeMessage struct {
+	Text string
+	Kind string
+}
+
+templ UptimePage(view uptimeapp.View, message UptimeMessage) {
+	@Layout("Uptime", "uptime") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Uptime</div>
+					<h1 class="h-1">Uptime monitors</h1>
+					<div class="page__sub">Project-scoped HTTP checks and passive heartbeats share one monitor state model.</div>
+				</div>
+				<a class="btn" href="/settings/audit">Audit trail</a>
+			</section>
+			@UptimePanel(view, message)
+		</div>
+	}
+}
+
+templ UptimePanel(view uptimeapp.View, message UptimeMessage) {
+	<section id="uptime-page" class="settings-stack">
+		if message.Text != "" {
+			<div class={ uptimeMessageClass(message) }>{ message.Text }</div>
+		}
+		<section class="detail-grid">
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Create HTTP monitor</span>
+					<span class="chip">HTTP GET</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/uptime/monitors"
+						class="form"
+						hx-post="/uptime/monitors"
+						hx-target="#uptime-page"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Name</span>
+							<input name="name" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>URL</span>
+							<input class="input--mono" name="url" type="url" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Interval</span>
+							<input name="interval_seconds" type="number" min="60" max="86400" value="60" required/>
+						</label>
+						<label>
+							<span>Timeout</span>
+							<input name="timeout_seconds" type="number" min="1" max="30" value="5" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save monitor</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Create heartbeat</span>
+					<span class="chip">passive</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/uptime/heartbeats"
+						class="form"
+						hx-post="/uptime/heartbeats"
+						hx-target="#uptime-page"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Name</span>
+							<input name="name" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Expected interval</span>
+							<input name="interval_seconds" type="number" min="60" max="86400" value="300" required/>
+						</label>
+						<label>
+							<span>Grace</span>
+							<input name="grace_seconds" type="number" min="60" max="86400" value="120" required/>
+						</label>
+						<button class="btn btn--primary" type="submit">Save heartbeat</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Create status page</span>
+					<span class="chip">V0</span>
+				</div>
+				<div class="card__body">
+					<form
+						method="post"
+						action="/uptime/status-pages"
+						class="form"
+						hx-post="/uptime/status-pages"
+						hx-target="#uptime-page"
+						hx-swap="outerHTML"
+					>
+						<label>
+							<span>Name</span>
+							<input name="name" autocomplete="off" required/>
+						</label>
+						<label>
+							<span>Access</span>
+							<select name="visibility" required>
+								<option value="private">Private</option>
+								<option value="public">Public</option>
+							</select>
+						</label>
+						<button class="btn btn--primary" type="submit">Save page</button>
+					</form>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card__head">
+					<span class="eyebrow">Check policy</span>
+					<span class="chip">bounded V0</span>
+				</div>
+				<div class="card__body">
+					<div class="stack stack--compact">
+						<div>
+							<div class="t-mute">State source</div>
+							<div>latest persisted worker check</div>
+						</div>
+						<div>
+							<div class="t-mute">Incident rule</div>
+							<div>opens on down transition, closes on up transition</div>
+						</div>
+						<div>
+							<div class="t-mute">URL guard</div>
+							<div>validated at create time and before every check</div>
+						</div>
+						<div>
+							<div class="t-mute">Heartbeat rule</div>
+							<div>check-ins mark up, overdue heartbeats mark down</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+		if len(view.StatusPages) > 0 {
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Status pages</span>
+					<span class="chip">{ statusPageCountLabel(view) }</span>
+				</div>
+				<div class="table-wrap table-wrap--embedded">
+					<table class="small-table">
+						<thead>
+							<tr>
+								<th>Name</th>
+								<th>Access</th>
+								<th>Status</th>
+								<th>Link</th>
+								<th>Created</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, page := range view.StatusPages {
+								<tr>
+									<td>{ page.Name }</td>
+									<td><span class="chip">{ page.Visibility }</span></td>
+									<td>{ page.Enabled }</td>
+									<td><a class="btn btn--ghost btn--sm" href={ templ.URL(statusPageLink(page)) }>Open</a></td>
+									<td class="mono">{ page.CreatedAt }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+		if len(view.Monitors) == 0 {
+			<section class="empty card">
+				<div class="eyebrow">No monitors</div>
+				<h2 class="h-2">Monitors will appear here after creation.</h2>
+				<p>The worker records checks and opens incidents when a monitor first goes down.</p>
+			</section>
+		} else {
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Monitors</span>
+					<span class="chip">{ uptimeMonitorCountLabel(view) }</span>
+				</div>
+				<div class="table-wrap table-wrap--embedded">
+					<table class="small-table">
+						<thead>
+							<tr>
+								<th>Name</th>
+								<th>Kind</th>
+								<th>State</th>
+								<th>Target</th>
+								<th>Interval</th>
+								<th>Timeout</th>
+								<th>Grace</th>
+								<th>Last</th>
+								<th>Next</th>
+								<th>Incident</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, monitor := range view.Monitors {
+								<tr>
+									<td>{ monitor.Name }</td>
+									<td><span class="chip">{ monitor.Kind }</span></td>
+									<td><span class={ uptimeStateChipClass(monitor.State) }>{ monitor.State }</span></td>
+									<td class="mono break">{ uptimeMonitorTarget(monitor) }</td>
+									<td class="mono">{ monitor.Interval }</td>
+									<td class="mono">{ uptimeMonitorTimeout(monitor) }</td>
+									<td class="mono">{ uptimeMonitorGrace(monitor) }</td>
+									<td>
+										<div class="mono">{ fallback(monitor.LastCheckedAt) }</div>
+										<div class="t-mute">{ uptimeLastCheckText(monitor) }</div>
+									</td>
+									<td class="mono">{ monitor.NextCheckAt }</td>
+									<td>{ fallback(monitor.OpenIncidentID) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+	</section>
+}
+
+func uptimeMessageClass(message UptimeMessage) string {
+	if message.Kind == "error" {
+		return "notice notice--error"
+	}
+
+	return "notice notice--success"
+}
+
+func uptimeStateChipClass(state string) string {
+	if state == "up" {
+		return "chip chip--ok"
+	}
+
+	if state == "down" {
+		return "chip chip--error"
+	}
+
+	return "chip chip--debug"
+}
+
+func uptimeMonitorCountLabel(view uptimeapp.View) string {
+	if len(view.Monitors) == 1 {
+		return "1 monitor"
+	}
+
+	return fmt.Sprintf("%d monitors", len(view.Monitors))
+}
+
+func statusPageCountLabel(view uptimeapp.View) string {
+	if len(view.StatusPages) == 1 {
+		return "1 page"
+	}
+
+	return fmt.Sprintf("%d pages", len(view.StatusPages))
+}
+
+func statusPageLink(page uptimeapp.StatusPageSummaryView) string {
+	if page.PublicPath != "" {
+		return page.PublicPath
+	}
+
+	return page.PrivatePath
+}
+
+func uptimeMonitorTarget(monitor uptimeapp.MonitorView) string {
+	if monitor.CheckInPath != "" {
+		return monitor.CheckInPath
+	}
+
+	return monitor.URL
+}
+
+func uptimeMonitorGrace(monitor uptimeapp.MonitorView) string {
+	if monitor.Grace == "" {
+		return "-"
+	}
+
+	return monitor.Grace
+}
+
+func uptimeMonitorTimeout(monitor uptimeapp.MonitorView) string {
+	if monitor.Kind == "heartbeat" {
+		return "-"
+	}
+
+	return monitor.Timeout
+}
+
+func uptimeLastCheckText(monitor uptimeapp.MonitorView) string {
+	if monitor.LastError != "" {
+		return monitor.LastError
+	}
+
+	if monitor.Kind == "heartbeat" && monitor.LastCheckInAt != "" {
+		return "check-in " + monitor.LastCheckInAt
+	}
+
+	if monitor.LastStatusCode != "" {
+		return "HTTP " + monitor.LastStatusCode
+	}
+
+	return "not checked"
+}

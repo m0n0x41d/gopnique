@@ -15,6 +15,7 @@ func (store *Store) FindCurrentProject(
 ) result.Result[projectapp.ProjectRecord] {
 	sql := `
 select
+  o.slug,
   o.name,
   p.id,
   p.name,
@@ -47,6 +48,7 @@ limit 1
 		query.Scope.OrganizationID.String(),
 		query.Scope.ProjectID.String(),
 	).Scan(
+		&record.OrganizationSlug,
 		&record.OrganizationName,
 		&projectIDText,
 		&record.Name,

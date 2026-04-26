@@ -43,7 +43,7 @@ func TestSentryStoreRouteAppliesSourceMapResolutionAtIngest(t *testing.T) {
 		nil,
 		captured,
 		captured,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		captured,
 		IngestEnrichments{SourceMapResolver: resolver},
 		NewSessionCodec("test-secret"),
@@ -233,9 +233,46 @@ func (vault *capturingVault) DeleteArtifact(
 
 func (vault *capturingVault) ListArtifacts(
 	_ context.Context,
-	_ artifacts.ArtifactScope,
+	scope artifacts.ArtifactScope,
 ) result.Result[[]artifacts.StoredArtifact] {
-	return result.Ok[[]artifacts.StoredArtifact](nil)
+	stored := []artifacts.StoredArtifact{}
+	prefix := strings.Join(
+		[]string{
+			scope.OrganizationID().String(),
+			scope.ProjectID().String(),
+			scope.Kind().String(),
+		},
+		"|",
+	) + "|"
+
+	vault.mu.Lock()
+	defer vault.mu.Unlock()
+
+	for key, body := range vault.contents {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+
+		nameValue := strings.TrimPrefix(key, prefix)
+		name, nameErr := domain.NewArtifactName(nameValue)
+		if nameErr != nil {
+			continue
+		}
+
+		artifactKey, keyErr := domain.NewArtifactKey(
+			scope.OrganizationID(),
+			scope.ProjectID(),
+			scope.Kind(),
+			name,
+		)
+		if keyErr != nil {
+			continue
+		}
+
+		stored = append(stored, artifacts.NewStoredArtifact(artifactKey, int64(len(body))))
+	}
+
+	return result.Ok(stored)
 }
 
 func vaultKey(key domain.ArtifactKey) string {

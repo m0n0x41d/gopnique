@@ -1,0 +1,215 @@
+package templates
+
+import (
+	"fmt"
+
+	uptimeapp "github.com/ivanzakutnii/error-tracker/internal/app/uptime"
+)
+
+templ PrivateStatusPage(view uptimeapp.StatusPageView) {
+	@Layout("Status: " + view.Name, "uptime") {
+		<div class="page">
+			@StatusPageBody(view, false)
+		</div>
+	}
+}
+
+templ PublicStatusPage(view uptimeapp.StatusPageView) {
+	<!doctype html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ view.Name }</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			<div class="status-public">
+				<div class="page">
+					@StatusPageBody(view, true)
+				</div>
+			</div>
+		</body>
+	</html>
+}
+
+templ StatusPageBody(view uptimeapp.StatusPageView, public bool) {
+	<section class="page__head">
+		<div class="page__title">
+			<div class="eyebrow">Status</div>
+			<h1 class="h-1">{ view.Name }</h1>
+			<div class="page__sub">Generated { view.GeneratedAt }</div>
+		</div>
+		if !public {
+			<a class="btn" href="/uptime">Uptime</a>
+		}
+	</section>
+	<section class="metric-grid metric-grid--tight">
+		<div class="kpi">
+			<div class="eyebrow">Up</div>
+			<div class="kpi__num">{ fmt.Sprint(statusMonitorCount(view, "up")) }</div>
+		</div>
+		<div class="kpi">
+			<div class="eyebrow">Down</div>
+			<div class="kpi__num">{ fmt.Sprint(statusMonitorCount(view, "down")) }</div>
+		</div>
+		<div class="kpi">
+			<div class="eyebrow">Unknown</div>
+			<div class="kpi__num">{ fmt.Sprint(statusMonitorCount(view, "unknown")) }</div>
+		</div>
+		<div class="kpi">
+			<div class="eyebrow">Incidents</div>
+			<div class="kpi__num">{ fmt.Sprint(statusOpenIncidentCount(view)) }</div>
+		</div>
+	</section>
+	if len(view.Monitors) == 0 {
+		<section class="empty card">
+			<div class="eyebrow">No monitors</div>
+			<h2 class="h-2">No monitors are attached to this page.</h2>
+		</section>
+	} else {
+		<section class="card">
+			<div class="card__head">
+				<span class="eyebrow">Monitors</span>
+				<span class="chip">{ statusMonitorTotalLabel(view) }</span>
+			</div>
+			<div class="table-wrap table-wrap--embedded">
+				<table class="small-table">
+					<thead>
+						<tr>
+							<th>Name</th>
+							<th>Kind</th>
+							<th>State</th>
+							<th>Target</th>
+							<th>Last</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, monitor := range view.Monitors {
+							<tr>
+								<td>{ monitor.Name }</td>
+								<td><span class="chip">{ monitor.Kind }</span></td>
+								<td><span class={ uptimeStateChipClass(monitor.State) }>{ monitor.State }</span></td>
+								<td class="mono break">{ statusMonitorTarget(monitor, public) }</td>
+								<td>
+									<div class="mono">{ fallback(monitor.LastCheckedAt) }</div>
+									<div class="t-mute">{ statusLastCheckText(monitor, public) }</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</section>
+	}
+	if len(view.Incidents) > 0 {
+		<section class="card mt-4">
+			<div class="card__head">
+				<span class="eyebrow">Incidents</span>
+				<span class="chip">{ statusIncidentTotalLabel(view) }</span>
+			</div>
+			<div class="table-wrap table-wrap--embedded">
+				<table class="small-table">
+					<thead>
+						<tr>
+							<th>Monitor</th>
+							<th>State</th>
+							<th>Reason</th>
+							<th>Opened</th>
+							<th>Resolved</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, incident := range view.Incidents {
+							<tr>
+								<td>{ incident.MonitorName }</td>
+								<td><span class={ statusIncidentChipClass(incident.State) }>{ incident.State }</span></td>
+								<td>{ statusIncidentReason(incident, public) }</td>
+								<td class="mono">{ incident.OpenedAt }</td>
+								<td class="mono">{ fallback(incident.ResolvedAt) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</section>
+	}
+}
+
+func statusMonitorCount(view uptimeapp.StatusPageView, state string) int {
+	count := 0
+	for _, monitor := range view.Monitors {
+		if monitor.State == state {
+			count++
+		}
+	}
+
+	return count
+}
+
+func statusOpenIncidentCount(view uptimeapp.StatusPageView) int {
+	count := 0
+	for _, incident := range view.Incidents {
+		if incident.State == "open" {
+			count++
+		}
+	}
+
+	return count
+}
+
+func statusMonitorTotalLabel(view uptimeapp.StatusPageView) string {
+	if len(view.Monitors) == 1 {
+		return "1 monitor"
+	}
+
+	return fmt.Sprintf("%d monitors", len(view.Monitors))
+}
+
+func statusIncidentTotalLabel(view uptimeapp.StatusPageView) string {
+	if len(view.Incidents) == 1 {
+		return "1 incident"
+	}
+
+	return fmt.Sprintf("%d incidents", len(view.Incidents))
+}
+
+func statusMonitorTarget(monitor uptimeapp.MonitorView, public bool) string {
+	if public {
+		return monitor.Kind
+	}
+
+	return uptimeMonitorTarget(monitor)
+}
+
+func statusLastCheckText(monitor uptimeapp.MonitorView, public bool) string {
+	if public && monitor.LastCheckedAt != "" {
+		return "checked"
+	}
+
+	if public {
+		return "not checked"
+	}
+
+	return uptimeLastCheckText(monitor)
+}
+
+func statusIncidentReason(incident uptimeapp.StatusPageIncidentView, public bool) string {
+	if public && incident.State == "open" {
+		return "active incident"
+	}
+
+	if public {
+		return "resolved incident"
+	}
+
+	return incident.Reason
+}
+
+func statusIncidentChipClass(state string) string {
+	if state == "open" {
+		return "chip chip--error"
+	}
+
+	return "chip chip--ok"
+}

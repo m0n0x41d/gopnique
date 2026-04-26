@@ -76,6 +76,104 @@ func TestApplyToCanonicalEventResolvesUnresolvedFrames(t *testing.T) {
 	}
 }
 
+func TestApplyToCanonicalEventUsesDistTagForSourceMapIdentity(t *testing.T) {
+	ctx := context.Background()
+	service, organizationID, projectID := newApplyServiceFixture(t)
+
+	uploadServiceFixtureWithDist(
+		t,
+		ctx,
+		service,
+		organizationID,
+		projectID,
+		"frontend@1.0.0",
+		"web",
+		"static/js/app.min.js",
+		buildSourceMapPayload(
+			[]string{"dist-original.js"},
+			[]string{"computeDistTotal"},
+			"AAAAA",
+		),
+	)
+
+	frame, frameErr := domain.NewUnresolvedJsStacktraceFrame(
+		"https://cdn.example.com/static/js/app.min.js",
+		"r",
+		1,
+		0,
+	)
+	if frameErr != nil {
+		t.Fatalf("frame: %v", frameErr)
+	}
+
+	event := buildEventFixtureWithTags(
+		t,
+		organizationID,
+		projectID,
+		"frontend@1.0.0",
+		map[string]string{"dist": "web"},
+		[]domain.JsStacktraceFrame{frame},
+	)
+
+	updated := ApplyToCanonicalEvent(ctx, service, event)
+	resolution, hasResolution := updated.JsStacktrace()[0].Resolution()
+	if !hasResolution {
+		t.Fatal("expected dist-keyed source map resolution")
+	}
+
+	if resolution.Source() != "dist-original.js" {
+		t.Fatalf("unexpected source: %q", resolution.Source())
+	}
+
+	if resolution.Symbol() != "computeDistTotal" {
+		t.Fatalf("unexpected symbol: %q", resolution.Symbol())
+	}
+}
+
+func TestApplyToCanonicalEventDoesNotFallBackToNoDistMapWhenDistTagPresent(t *testing.T) {
+	ctx := context.Background()
+	service, organizationID, projectID := newApplyServiceFixture(t)
+
+	uploadServiceFixture(
+		t,
+		ctx,
+		service,
+		organizationID,
+		projectID,
+		"frontend@1.0.0",
+		"static/js/app.min.js",
+		buildSourceMapPayload(
+			[]string{"no-dist-original.js"},
+			[]string{"computeNoDistTotal"},
+			"AAAAA",
+		),
+	)
+
+	frame, frameErr := domain.NewUnresolvedJsStacktraceFrame(
+		"https://cdn.example.com/static/js/app.min.js",
+		"r",
+		1,
+		0,
+	)
+	if frameErr != nil {
+		t.Fatalf("frame: %v", frameErr)
+	}
+
+	event := buildEventFixtureWithTags(
+		t,
+		organizationID,
+		projectID,
+		"frontend@1.0.0",
+		map[string]string{"dist": "web"},
+		[]domain.JsStacktraceFrame{frame},
+	)
+
+	updated := ApplyToCanonicalEvent(ctx, service, event)
+	if _, hasResolution := updated.JsStacktrace()[0].Resolution(); hasResolution {
+		t.Fatal("expected unresolved frame when only the no-dist map exists")
+	}
+}
+
 func TestApplyToCanonicalEventReturnsUnchangedWhenResolverNil(t *testing.T) {
 	_, organizationID, projectID := newApplyServiceFixture(t)
 
@@ -280,12 +378,41 @@ func uploadServiceFixture(
 ) {
 	t.Helper()
 
+	uploadServiceFixtureWithDist(
+		t,
+		ctx,
+		service,
+		organizationID,
+		projectID,
+		releaseInput,
+		"",
+		fileNameInput,
+		payload,
+	)
+}
+
+func uploadServiceFixtureWithDist(
+	t *testing.T,
+	ctx context.Context,
+	service *Service,
+	organizationID domain.OrganizationID,
+	projectID domain.ProjectID,
+	releaseInput string,
+	distInput string,
+	fileNameInput string,
+	payload []byte,
+) {
+	t.Helper()
+
 	release, releaseErr := domain.NewReleaseName(releaseInput)
 	if releaseErr != nil {
 		t.Fatalf("release: %v", releaseErr)
 	}
 
-	dist, _ := domain.NewOptionalDistName("")
+	dist, distErr := domain.NewOptionalDistName(distInput)
+	if distErr != nil {
+		t.Fatalf("dist: %v", distErr)
+	}
 
 	fileName, fileErr := domain.NewSourceMapFileName(fileNameInput)
 	if fileErr != nil {
@@ -308,6 +435,19 @@ func buildEventFixture(
 	organizationID domain.OrganizationID,
 	projectID domain.ProjectID,
 	release string,
+	frames []domain.JsStacktraceFrame,
+) domain.CanonicalEvent {
+	t.Helper()
+
+	return buildEventFixtureWithTags(t, organizationID, projectID, release, nil, frames)
+}
+
+func buildEventFixtureWithTags(
+	t *testing.T,
+	organizationID domain.OrganizationID,
+	projectID domain.ProjectID,
+	release string,
+	tags map[string]string,
 	frames []domain.JsStacktraceFrame,
 ) domain.CanonicalEvent {
 	t.Helper()
@@ -336,6 +476,7 @@ func buildEventFixture(
 		Title:          title,
 		Platform:       "javascript",
 		Release:        release,
+		Tags:           tags,
 		JsStacktrace:   frames,
 	})
 	if buildErr != nil {

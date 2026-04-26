@@ -15,6 +15,7 @@ func TestParseArtifactKindAcceptsKnownValues(t *testing.T) {
 		{"DEBUG_FILE", ArtifactKindDebugFile()},
 		{"minidump", ArtifactKindMinidump()},
 		{"attachment", ArtifactKindAttachment()},
+		{"upload_chunk", ArtifactKindUploadChunk()},
 	}
 
 	for _, tc := range cases {

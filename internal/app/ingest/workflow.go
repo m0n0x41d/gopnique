@@ -14,6 +14,8 @@ type IngestCommand struct {
 	event domain.CanonicalEvent
 }
 
+type AppendEffect func(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}]
+
 type EventAppendResult struct {
 	duplicate bool
 }
@@ -91,6 +93,28 @@ func IngestCanonicalEvent(
 	command IngestCommand,
 	transaction IngestTransaction,
 ) result.Result[IngestReceipt] {
+	return ingestCanonicalEvent(ctx, command, transaction, noAppendEffect)
+}
+
+func IngestCanonicalEventWithAppendEffect(
+	ctx context.Context,
+	command IngestCommand,
+	transaction IngestTransaction,
+	appendEffect AppendEffect,
+) result.Result[IngestReceipt] {
+	if appendEffect == nil {
+		return result.Err[IngestReceipt](errors.New("append effect is required"))
+	}
+
+	return ingestCanonicalEvent(ctx, command, transaction, appendEffect)
+}
+
+func ingestCanonicalEvent(
+	ctx context.Context,
+	command IngestCommand,
+	transaction IngestTransaction,
+	appendEffect AppendEffect,
+) result.Result[IngestReceipt] {
 	fingerprintResult := grouping.ComputeFingerprint(command.event)
 	fingerprint, fingerprintErr := fingerprintResult.Value()
 	if fingerprintErr != nil {
@@ -103,7 +127,7 @@ func IngestCanonicalEvent(
 		return result.Err[IngestReceipt](acceptedErr)
 	}
 
-	transactionResult := transaction.Run(ctx, ingestProgram(accepted))
+	transactionResult := transaction.Run(ctx, ingestProgram(accepted, appendEffect))
 	completed, completedErr := transactionResult.Value()
 	if completedErr != nil {
 		return result.Err[IngestReceipt](completedErr)
@@ -112,7 +136,11 @@ func IngestCanonicalEvent(
 	return result.Ok(completed.receipt)
 }
 
-func ingestProgram(accepted ingestplan.AcceptedEvent) IngestProgram {
+func noAppendEffect(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}] {
+	return result.Ok(struct{}{})
+}
+
+func ingestProgram(accepted ingestplan.AcceptedEvent, appendEffect AppendEffect) IngestProgram {
 	return func(ctx context.Context, ports TransactionalIngestPorts) result.Result[IngestTransactionResult] {
 		event := accepted.Event()
 
@@ -144,6 +172,12 @@ func ingestProgram(accepted ingestplan.AcceptedEvent) IngestProgram {
 
 		if appendState.WasDuplicate() {
 			return result.Ok(transactionResult(duplicateReceipt(accepted)))
+		}
+
+		appendEffectResult := appendEffect(ctx, accepted)
+		_, appendEffectErr := appendEffectResult.Value()
+		if appendEffectErr != nil {
+			return result.Err[IngestTransactionResult](appendEffectErr)
 		}
 
 		if !event.CreatesIssue() {

@@ -76,6 +76,22 @@ type NotificationIntentID struct {
 	value string
 }
 
+type MonitorID struct {
+	value string
+}
+
+type HeartbeatEndpointID struct {
+	value string
+}
+
+type StatusPageID struct {
+	value string
+}
+
+type StatusPageToken struct {
+	value string
+}
+
 func NewOrganizationID(input string) (OrganizationID, error) {
 	value, err := normalizeUUID(input)
 	if err != nil {
@@ -229,6 +245,42 @@ func NewNotificationIntentID(input string) (NotificationIntentID, error) {
 	return NotificationIntentID{value: value}, nil
 }
 
+func NewMonitorID(input string) (MonitorID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return MonitorID{}, err
+	}
+
+	return MonitorID{value: value}, nil
+}
+
+func NewHeartbeatEndpointID(input string) (HeartbeatEndpointID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return HeartbeatEndpointID{}, err
+	}
+
+	return HeartbeatEndpointID{value: value}, nil
+}
+
+func NewStatusPageID(input string) (StatusPageID, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return StatusPageID{}, err
+	}
+
+	return StatusPageID{value: value}, nil
+}
+
+func NewStatusPageToken(input string) (StatusPageToken, error) {
+	value, err := normalizeUUID(input)
+	if err != nil {
+		return StatusPageToken{}, err
+	}
+
+	return StatusPageToken{value: value}, nil
+}
+
 func (id OrganizationID) String() string {
 	return dashedUUID(id.value)
 }
@@ -295,6 +347,22 @@ func (id TeamID) String() string {
 
 func (id NotificationIntentID) String() string {
 	return dashedUUID(id.value)
+}
+
+func (id MonitorID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id HeartbeatEndpointID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (id StatusPageID) String() string {
+	return dashedUUID(id.value)
+}
+
+func (token StatusPageToken) String() string {
+	return dashedUUID(token.value)
 }
 
 func (id EventID) Hex() string {

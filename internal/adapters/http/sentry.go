@@ -3,9 +3,12 @@ package httpadapter
 import (
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,16 +18,21 @@ import (
 	"time"
 
 	"github.com/ivanzakutnii/error-tracker/internal/adapters/sentryprotocol"
+	"github.com/ivanzakutnii/error-tracker/internal/app/debugfiles"
 	"github.com/ivanzakutnii/error-tracker/internal/app/ingest"
+	"github.com/ivanzakutnii/error-tracker/internal/app/minidumps"
 	ratelimitapp "github.com/ivanzakutnii/error-tracker/internal/app/ratelimit"
 	"github.com/ivanzakutnii/error-tracker/internal/app/sourcemaps"
 	userreportapp "github.com/ivanzakutnii/error-tracker/internal/app/userreports"
 	"github.com/ivanzakutnii/error-tracker/internal/domain"
 	"github.com/ivanzakutnii/error-tracker/internal/kernel/result"
+	"github.com/ivanzakutnii/error-tracker/internal/plans/ingestplan"
 )
 
 const maxStoreRequestBytes = 1 * 1024 * 1024
 const maxUserFeedbackRequestBytes = 1 * 1024 * 1024
+const minidumpMultipartMemoryBytes = 8 * 1024 * 1024
+const minidumpMultipartOverheadBytes = 1 * 1024 * 1024
 
 var sentryKeyPattern = regexp.MustCompile(`(?:^|[\s,])(sentry_key|glitchtip_key)=([^,\s]+)`)
 
@@ -54,21 +62,49 @@ type parsedSentryEvent struct {
 	userReports []sentryprotocol.UserReportItem
 }
 
-func sentryStoreHandler(backend SentryIngestBackend, sourceMapResolver *sourcemaps.Service) http.HandlerFunc {
+type minidumpUpload struct {
+	file       multipart.File
+	fileHeader *multipart.FileHeader
+	metadata   minidumpMetadata
+}
+
+type minidumpMetadata struct {
+	eventID     string
+	release     string
+	environment string
+	level       string
+	platform    string
+}
+
+type preparedMinidumpEvent struct {
+	event    domain.CanonicalEvent
+	identity domain.MinidumpIdentity
+}
+
+func sentryStoreHandler(backend SentryIngestBackend, enrichments IngestEnrichments) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		handleSentryIngestCarrier(w, r, backend, sourceMapResolver, sentryStoreRequest)
+		handleSentryIngestCarrier(w, r, backend, enrichments, sentryStoreRequest)
 	}
 }
 
-func sentryEnvelopeHandler(backend SentryIngestBackend, sourceMapResolver *sourcemaps.Service) http.HandlerFunc {
+func sentryEnvelopeHandler(backend SentryIngestBackend, enrichments IngestEnrichments) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		handleSentryIngestCarrier(w, r, backend, sourceMapResolver, sentryEnvelopeRequest)
+		handleSentryIngestCarrier(w, r, backend, enrichments, sentryEnvelopeRequest)
 	}
 }
 
 func sentrySecurityHandler(backend SentryIngestBackend) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		handleSentrySecurityCarrier(w, r, backend)
+	}
+}
+
+func sentryMinidumpHandler(
+	backend SentryIngestBackend,
+	enrichments IngestEnrichments,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		handleSentryMinidumpCarrier(w, r, backend, enrichments)
 	}
 }
 
@@ -82,7 +118,7 @@ func handleSentryIngestCarrier(
 	w http.ResponseWriter,
 	r *http.Request,
 	backend SentryIngestBackend,
-	sourceMapResolver *sourcemaps.Service,
+	enrichments IngestEnrichments,
 	kind sentryRequestKind,
 ) {
 	if backend == nil {
@@ -130,7 +166,7 @@ func handleSentryIngestCarrier(
 	}
 
 	if parsed.hasEvent {
-		parsed.event = sourcemaps.ApplyToCanonicalEvent(r.Context(), sourceMapResolver, parsed.event)
+		parsed.event = applyIngestEnrichments(r.Context(), enrichments, parsed.event)
 	}
 
 	reportCommandsResult := prepareParsedUserReports(auth, parsed.userReports)
@@ -178,6 +214,89 @@ func handleSentryIngestCarrier(
 	reportErr := submitPreparedUserReports(r.Context(), backend, reportCommands)
 	if reportErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": reportErr.Error()})
+		return
+	}
+
+	writeIngestReceipt(w, receipt)
+}
+
+func handleSentryMinidumpCarrier(
+	w http.ResponseWriter,
+	r *http.Request,
+	backend SentryIngestBackend,
+	enrichments IngestEnrichments,
+) {
+	if backend == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "ingest_backend_not_configured"})
+		return
+	}
+
+	if enrichments.MinidumpStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "minidump_store_not_configured"})
+		return
+	}
+
+	carrierResult := decodeSentryAuthCarrier(r, nil, sentryStoreRequest)
+	carrier, authErr := carrierResult.Value()
+	if authErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	authResult := resolveProjectAuth(r, backend, carrier)
+	auth, projectErr := authResult.Value()
+	if projectErr != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"detail": "denied"})
+		return
+	}
+
+	receivedAt, receivedErr := domain.NewTimePoint(time.Now().UTC())
+	if receivedErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "clock_error"})
+		return
+	}
+
+	rateLimitResult := checkSentryRateLimit(r.Context(), backend, auth, carrier, receivedAt)
+	rateLimit, rateLimitErr := rateLimitResult.Value()
+	if rateLimitErr != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"detail": "rate_limit_unavailable"})
+		return
+	}
+
+	if !rateLimit.Allowed() {
+		writeRateLimitDecision(w, rateLimit)
+		return
+	}
+
+	uploadResult := readMinidumpMultipart(w, r)
+	defer cleanupMultipartForm(r)
+	upload, uploadErr := uploadResult.Value()
+	if uploadErr != nil {
+		writeJSON(w, minidumpHTTPStatus(uploadErr), map[string]string{"detail": minidumpErrorDetail(uploadErr)})
+		return
+	}
+	defer upload.file.Close()
+
+	metadataResult := parseMinidumpNativeMetadata(upload.file, upload.fileHeader.Size)
+	metadata, metadataErr := metadataResult.Value()
+	if metadataErr != nil {
+		writeJSON(w, minidumpHTTPStatus(metadataErr), map[string]string{"detail": minidumpErrorDetail(metadataErr)})
+		return
+	}
+
+	eventResult := prepareMinidumpEvent(auth, receivedAt, upload, metadata)
+	prepared, eventErr := eventResult.Value()
+	if eventErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"detail": eventErr.Error()})
+		return
+	}
+
+	prepared.event = debugfiles.ApplyToCanonicalEvent(r.Context(), enrichments.DebugFileStore, prepared.event)
+
+	receiptResult := ingestMinidumpEvent(r.Context(), backend, enrichments.MinidumpStore, prepared, upload.file)
+	receipt, receiptErr := receiptResult.Value()
+	if receiptErr != nil {
+		writeJSON(w, minidumpHTTPStatus(receiptErr), map[string]string{"detail": minidumpErrorDetail(receiptErr)})
 		return
 	}
 
@@ -607,6 +726,347 @@ func parseSentryRequest(
 		hasEvent:    true,
 		userReports: envelope.UserReports(),
 	})
+}
+
+func applyIngestEnrichments(
+	ctx context.Context,
+	enrichments IngestEnrichments,
+	event domain.CanonicalEvent,
+) domain.CanonicalEvent {
+	enriched := sourcemaps.ApplyToCanonicalEvent(ctx, enrichments.SourceMapResolver, event)
+	enriched = debugfiles.ApplyToCanonicalEvent(ctx, enrichments.DebugFileStore, enriched)
+
+	return enriched
+}
+
+func readMinidumpMultipart(w http.ResponseWriter, r *http.Request) result.Result[minidumpUpload] {
+	r.Body = http.MaxBytesReader(w, r.Body, maxMinidumpRequestBytes())
+
+	parseErr := r.ParseMultipartForm(minidumpMultipartMemoryBytes)
+	if parseErr != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(parseErr, &maxBytesErr) {
+			return result.Err[minidumpUpload](minidumps.ErrMinidumpTooLarge)
+		}
+
+		return result.Err[minidumpUpload](errors.New("invalid_multipart"))
+	}
+
+	file, fileHeader, fileErr := r.FormFile("upload_file_minidump")
+	if fileErr != nil {
+		return result.Err[minidumpUpload](errors.New("missing_upload_file_minidump"))
+	}
+
+	if fileHeader.Size > minidumps.MaxUploadBytes() {
+		_ = file.Close()
+		return result.Err[minidumpUpload](minidumps.ErrMinidumpTooLarge)
+	}
+
+	return result.Ok(minidumpUpload{
+		file:       file,
+		fileHeader: fileHeader,
+		metadata:   minidumpMetadataFromForm(r.MultipartForm),
+	})
+}
+
+func cleanupMultipartForm(r *http.Request) {
+	if r.MultipartForm == nil {
+		return
+	}
+
+	_ = r.MultipartForm.RemoveAll()
+}
+
+func maxMinidumpRequestBytes() int64 {
+	return minidumps.MaxUploadBytes() + minidumpMultipartOverheadBytes
+}
+
+func minidumpMetadataFromForm(form *multipart.Form) minidumpMetadata {
+	metadata := minidumpMetadata{}
+	metadata = mergeSentryMetadataJSON(metadata, firstFormValue(form, "sentry"))
+	metadata.eventID = firstNonEmpty(metadata.eventID, firstFormValue(form, "event_id"), firstFormValue(form, "sentry[event_id]"))
+	metadata.release = firstNonEmpty(metadata.release, firstFormValue(form, "release"), firstFormValue(form, "sentry[release]"))
+	metadata.environment = firstNonEmpty(metadata.environment, firstFormValue(form, "environment"), firstFormValue(form, "sentry[environment]"))
+	metadata.level = firstNonEmpty(metadata.level, firstFormValue(form, "level"), firstFormValue(form, "sentry[level]"))
+	metadata.platform = firstNonEmpty(metadata.platform, firstFormValue(form, "platform"), firstFormValue(form, "sentry[platform]"))
+
+	return metadata
+}
+
+func mergeSentryMetadataJSON(metadata minidumpMetadata, input string) minidumpMetadata {
+	if strings.TrimSpace(input) == "" {
+		return metadata
+	}
+
+	var payload struct {
+		EventID     string `json:"event_id"`
+		Release     string `json:"release"`
+		Environment string `json:"environment"`
+		Level       string `json:"level"`
+		Platform    string `json:"platform"`
+	}
+	decodeErr := json.Unmarshal([]byte(input), &payload)
+	if decodeErr != nil {
+		return metadata
+	}
+
+	metadata.eventID = firstNonEmpty(metadata.eventID, payload.EventID)
+	metadata.release = firstNonEmpty(metadata.release, payload.Release)
+	metadata.environment = firstNonEmpty(metadata.environment, payload.Environment)
+	metadata.level = firstNonEmpty(metadata.level, payload.Level)
+	metadata.platform = firstNonEmpty(metadata.platform, payload.Platform)
+
+	return metadata
+}
+
+func firstFormValue(form *multipart.Form, name string) string {
+	if form == nil {
+		return ""
+	}
+
+	values := form.Value[name]
+	if len(values) == 0 {
+		return ""
+	}
+
+	return strings.TrimSpace(values[0])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+
+	return ""
+}
+
+func parseMinidumpNativeMetadata(file multipart.File, size int64) result.Result[minidumps.NativeMetadata] {
+	_, seekErr := file.Seek(0, io.SeekStart)
+	if seekErr != nil {
+		return result.Err[minidumps.NativeMetadata](seekErr)
+	}
+
+	metadataResult := minidumps.ParseNativeMetadata(file, size)
+	metadata, metadataErr := metadataResult.Value()
+
+	_, resetErr := file.Seek(0, io.SeekStart)
+	if resetErr != nil {
+		return result.Err[minidumps.NativeMetadata](resetErr)
+	}
+
+	if metadataErr != nil {
+		return result.Err[minidumps.NativeMetadata](metadataErr)
+	}
+
+	return result.Ok(metadata)
+}
+
+func prepareMinidumpEvent(
+	auth domain.ProjectAuth,
+	receivedAt domain.TimePoint,
+	upload minidumpUpload,
+	metadata minidumps.NativeMetadata,
+) result.Result[preparedMinidumpEvent] {
+	eventIDResult := minidumpEventID(upload.metadata)
+	eventID, eventIDErr := eventIDResult.Value()
+	if eventIDErr != nil {
+		return result.Err[preparedMinidumpEvent](eventIDErr)
+	}
+
+	attachmentName, attachmentNameErr := domain.NewMinidumpAttachmentName("upload_file_minidump")
+	if attachmentNameErr != nil {
+		return result.Err[preparedMinidumpEvent](attachmentNameErr)
+	}
+
+	identity, identityErr := domain.NewMinidumpIdentity(eventID, attachmentName)
+	if identityErr != nil {
+		return result.Err[preparedMinidumpEvent](identityErr)
+	}
+
+	attachment, attachmentErr := domain.NewEventAttachment(
+		domain.ArtifactKindMinidump(),
+		identity.ArtifactName(),
+		upload.fileHeader.Size,
+		upload.fileHeader.Header.Get("Content-Type"),
+	)
+	if attachmentErr != nil {
+		return result.Err[preparedMinidumpEvent](attachmentErr)
+	}
+
+	level, levelErr := minidumpLevel(upload.metadata)
+	if levelErr != nil {
+		return result.Err[preparedMinidumpEvent](levelErr)
+	}
+
+	title, titleErr := domain.NewEventTitle("Native crash minidump")
+	if titleErr != nil {
+		return result.Err[preparedMinidumpEvent](titleErr)
+	}
+
+	event, eventErr := domain.NewCanonicalEvent(domain.CanonicalEventParams{
+		OrganizationID:       auth.OrganizationID(),
+		ProjectID:            auth.ProjectID(),
+		EventID:              eventID,
+		OccurredAt:           receivedAt,
+		ReceivedAt:           receivedAt,
+		Kind:                 domain.EventKindError,
+		Level:                level,
+		Title:                title,
+		Platform:             minidumpPlatform(upload.metadata),
+		Release:              upload.metadata.release,
+		Environment:          upload.metadata.environment,
+		DefaultGroupingParts: []string{"native", "minidump"},
+		Attachments:          []domain.EventAttachment{attachment},
+		NativeModules:        metadata.NativeModules(),
+		NativeFrames:         metadata.NativeFrames(),
+	})
+	if eventErr != nil {
+		return result.Err[preparedMinidumpEvent](eventErr)
+	}
+
+	return result.Ok(preparedMinidumpEvent{event: event, identity: identity})
+}
+
+func minidumpEventID(metadata minidumpMetadata) result.Result[domain.EventID] {
+	if metadata.eventID != "" {
+		eventID, eventIDErr := domain.NewEventID(metadata.eventID)
+		if eventIDErr != nil {
+			return result.Err[domain.EventID](errors.New("invalid_minidump_event_id"))
+		}
+
+		return result.Ok(eventID)
+	}
+
+	eventID, eventIDErr := randomEventID()
+	if eventIDErr != nil {
+		return result.Err[domain.EventID](eventIDErr)
+	}
+
+	return result.Ok(eventID)
+}
+
+func randomEventID() (domain.EventID, error) {
+	bytes := make([]byte, 16)
+	_, readErr := rand.Read(bytes)
+	if readErr != nil {
+		return domain.EventID{}, readErr
+	}
+
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+	return domain.NewEventID(hex.EncodeToString(bytes))
+}
+
+func minidumpLevel(metadata minidumpMetadata) (domain.EventLevel, error) {
+	if metadata.level == "" {
+		return domain.EventLevelFatal, nil
+	}
+
+	return domain.NewEventLevel(metadata.level)
+}
+
+func minidumpPlatform(metadata minidumpMetadata) string {
+	if metadata.platform == "" {
+		return "native"
+	}
+
+	return metadata.platform
+}
+
+func ingestMinidumpEvent(
+	ctx context.Context,
+	backend SentryIngestBackend,
+	minidumpStore *minidumps.Service,
+	prepared preparedMinidumpEvent,
+	file multipart.File,
+) result.Result[ingest.IngestReceipt] {
+	uploaded := false
+	uploadEffect := func(ctx context.Context, event ingestplan.AcceptedEvent) result.Result[struct{}] {
+		_, seekErr := file.Seek(0, io.SeekStart)
+		if seekErr != nil {
+			return result.Err[struct{}](seekErr)
+		}
+
+		uploadResult := minidumpStore.Upload(
+			ctx,
+			prepared.event.OrganizationID(),
+			prepared.event.ProjectID(),
+			prepared.identity,
+			file,
+		)
+		_, uploadErr := uploadResult.Value()
+		if uploadErr != nil {
+			return result.Err[struct{}](uploadErr)
+		}
+
+		uploaded = true
+		return result.Ok(struct{}{})
+	}
+
+	receiptResult := ingest.IngestCanonicalEventWithAppendEffect(
+		ctx,
+		ingest.NewIngestCommand(prepared.event),
+		backend,
+		uploadEffect,
+	)
+	receipt, receiptErr := receiptResult.Value()
+	if receiptErr != nil {
+		if uploaded {
+			_ = cleanupStoredMinidump(ctx, minidumpStore, prepared)
+		}
+
+		return result.Err[ingest.IngestReceipt](receiptErr)
+	}
+
+	return result.Ok(receipt)
+}
+
+func cleanupStoredMinidump(
+	ctx context.Context,
+	minidumpStore *minidumps.Service,
+	prepared preparedMinidumpEvent,
+) error {
+	deleteResult := minidumpStore.Delete(
+		ctx,
+		prepared.event.OrganizationID(),
+		prepared.event.ProjectID(),
+		prepared.identity,
+	)
+	_, deleteErr := deleteResult.Value()
+	return deleteErr
+}
+
+func minidumpHTTPStatus(err error) int {
+	if errors.Is(err, minidumps.ErrMinidumpTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+
+	if errors.Is(err, minidumps.ErrUnsupportedMinidump) {
+		return http.StatusBadRequest
+	}
+
+	switch err.Error() {
+	case "invalid_multipart", "missing_upload_file_minidump", "invalid_minidump_event_id":
+		return http.StatusBadRequest
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+func minidumpErrorDetail(err error) string {
+	if errors.Is(err, minidumps.ErrUnsupportedMinidump) {
+		return "invalid_minidump"
+	}
+
+	if errors.Is(err, minidumps.ErrMinidumpTooLarge) {
+		return "payload_too_large"
+	}
+
+	return err.Error()
 }
 
 type userFeedbackRequest struct {

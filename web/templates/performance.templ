@@ -1,0 +1,150 @@
+package templates
+
+import (
+	"fmt"
+
+	performanceapp "github.com/ivanzakutnii/error-tracker/internal/app/performance"
+)
+
+templ PerformanceList(view performanceapp.ListView) {
+	@Layout("Performance", "performance") {
+		<div class="page">
+			<section class="page__head">
+				<div class="page__title">
+					<div class="eyebrow">Performance</div>
+					<h1 class="h-1">Transactions</h1>
+					<div class="page__sub">Transaction groups from accepted Sentry transaction envelopes.</div>
+				</div>
+				<a class="btn" href="/stats">Project stats</a>
+			</section>
+			if len(view.Groups) == 0 {
+				<section class="empty card">
+					<div class="eyebrow">No transactions</div>
+					<h2 class="h-2">Accepted transaction events will appear here.</h2>
+					<p>Only sampled transactions sent by an SDK are persisted.</p>
+				</section>
+			} else {
+				<section class="card">
+					<div class="card__head">
+						<span class="eyebrow">Groups</span>
+						<span class="chip">{ performanceGroupCountLabel(view) }</span>
+					</div>
+					<div class="table-wrap table-wrap--embedded">
+						<table class="small-table">
+							<thead>
+								<tr>
+									<th>Transaction</th>
+									<th>Operation</th>
+									<th>Count</th>
+									<th>Avg</th>
+									<th>p95</th>
+									<th>Status</th>
+									<th>Latest</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, group := range view.Groups {
+									<tr>
+										<td class="break"><a href={ templ.URL("/performance/" + group.ID) }>{ group.Name }</a></td>
+										<td class="mono">{ group.Operation }</td>
+										<td class="mono">{ fmt.Sprint(group.Count) }</td>
+										<td class="mono">{ group.AverageDuration }</td>
+										<td class="mono">{ group.P95Duration }</td>
+										<td>{ group.LatestStatus }</td>
+										<td>{ group.LatestSeen }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ PerformanceDetail(view performanceapp.DetailView) {
+	@Layout("Transaction", "performance") {
+		<div class="page">
+			<section class="detail-head">
+				<div class="row gap-2">
+					<a href="/performance" class="btn btn--ghost btn--sm">All transactions</a>
+				</div>
+				<h1>{ view.Name }</h1>
+				<div class="detail-head__meta">
+					<span class="chip">{ view.Operation }</span>
+					<span class="chip">{ view.LatestStatus }</span>
+					<span class="mono">{ fmt.Sprint(view.Count) } events</span>
+					<span class="mono">latest { view.LatestSeen }</span>
+				</div>
+			</section>
+			<section class="metric-grid">
+				<div class="kpi">
+					<div class="eyebrow">Average</div>
+					<div class="kpi__num">{ view.AverageDuration }<span class="unit">duration</span></div>
+					<div class="kpi__delta">group mean</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">p95</div>
+					<div class="kpi__num">{ view.P95Duration }<span class="unit">duration</span></div>
+					<div class="kpi__delta">bounded local aggregate</div>
+				</div>
+				<div class="kpi">
+					<div class="eyebrow">Samples</div>
+					<div class="kpi__num">{ fmt.Sprint(view.Count) }<span class="unit">events</span></div>
+					<div class="kpi__delta">SDK-sampled only</div>
+				</div>
+			</section>
+			<section class="card">
+				<div class="card__head">
+					<span class="eyebrow">Recent events</span>
+					<span class="chip">{ performanceEventCountLabel(view) }</span>
+				</div>
+				<div class="table-wrap table-wrap--embedded">
+					<table class="small-table">
+						<thead>
+							<tr>
+								<th>Event</th>
+								<th>Duration</th>
+								<th>Status</th>
+								<th>Trace</th>
+								<th>Span</th>
+								<th>Spans</th>
+								<th>Received</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, event := range view.RecentEvents {
+								<tr>
+									<td class="break"><a href={ templ.URL("/events/" + event.EventID) }>{ event.EventID }</a></td>
+									<td class="mono">{ event.Duration }</td>
+									<td>{ event.Status }</td>
+									<td class="mono break">{ fallback(event.TraceID) }</td>
+									<td class="mono">{ fallback(event.SpanID) }</td>
+									<td class="mono">{ fmt.Sprint(event.SpanCount) }</td>
+									<td>{ event.ReceivedAt }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+func performanceGroupCountLabel(view performanceapp.ListView) string {
+	if len(view.Groups) == 1 {
+		return "1 group"
+	}
+
+	return fmt.Sprintf("%d groups", len(view.Groups))
+}
+
+func performanceEventCountLabel(view performanceapp.DetailView) string {
+	if len(view.RecentEvents) == 1 {
+		return "1 event"
+	}
+
+	return fmt.Sprintf("%d events", len(view.RecentEvents))
+}

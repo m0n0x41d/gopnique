@@ -2,6 +2,7 @@ package sentryprotocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -15,11 +16,13 @@ import (
 type rawEventPayload struct {
 	EventID     string          `json:"event_id"`
 	Timestamp   json.RawMessage `json:"timestamp"`
+	StartTime   json.RawMessage `json:"start_timestamp"`
 	Type        string          `json:"type"`
 	Level       string          `json:"level"`
 	Logger      string          `json:"logger"`
 	Platform    string          `json:"platform"`
 	Release     string          `json:"release"`
+	Dist        string          `json:"dist"`
 	Environment string          `json:"environment"`
 	ServerName  string          `json:"server_name"`
 	Message     json.RawMessage `json:"message"`
@@ -32,6 +35,9 @@ type rawEventPayload struct {
 	User        json.RawMessage `json:"user"`
 	Request     json.RawMessage `json:"request"`
 	SDK         json.RawMessage `json:"sdk"`
+	Contexts    rawContexts     `json:"contexts"`
+	Spans       []rawSpan       `json:"spans"`
+	DebugMeta   rawDebugMeta    `json:"debug_meta"`
 }
 
 type rawLogEntry struct {
@@ -53,12 +59,48 @@ type rawStacktrace struct {
 }
 
 type rawFrame struct {
-	Filename string `json:"filename"`
-	AbsPath  string `json:"abs_path"`
-	Function string `json:"function"`
-	InApp    *bool  `json:"in_app"`
-	Lineno   int    `json:"lineno"`
-	Colno    int    `json:"colno"`
+	Filename        string          `json:"filename"`
+	AbsPath         string          `json:"abs_path"`
+	Function        string          `json:"function"`
+	Package         string          `json:"package"`
+	DebugID         string          `json:"debug_id"`
+	InstructionAddr json.RawMessage `json:"instruction_addr"`
+	InApp           *bool           `json:"in_app"`
+	Lineno          int             `json:"lineno"`
+	Colno           int             `json:"colno"`
+}
+
+type rawContexts struct {
+	Trace rawTraceContext `json:"trace"`
+}
+
+type rawTraceContext struct {
+	TraceID      string `json:"trace_id"`
+	SpanID       string `json:"span_id"`
+	ParentSpanID string `json:"parent_span_id"`
+	Operation    string `json:"op"`
+	Status       string `json:"status"`
+}
+
+type rawSpan struct {
+	SpanID       string          `json:"span_id"`
+	ParentSpanID string          `json:"parent_span_id"`
+	Operation    string          `json:"op"`
+	Description  string          `json:"description"`
+	Status       string          `json:"status"`
+	StartTime    json.RawMessage `json:"start_timestamp"`
+	Timestamp    json.RawMessage `json:"timestamp"`
+}
+
+type rawDebugMeta struct {
+	Images []rawDebugImage `json:"images"`
+}
+
+type rawDebugImage struct {
+	DebugID   string          `json:"debug_id"`
+	CodeFile  string          `json:"code_file"`
+	ImageAddr json.RawMessage `json:"image_addr"`
+	ImageSize json.RawMessage `json:"image_size"`
 }
 
 func ParseStoreEvent(
@@ -106,6 +148,18 @@ func parseEventPayload(
 		return result.Err[domain.CanonicalEvent](titleErr)
 	}
 
+	tagsResult := eventTags(project, raw)
+	tags, tagsErr := tagsResult.Value()
+	if tagsErr != nil {
+		return result.Err[domain.CanonicalEvent](tagsErr)
+	}
+
+	transactionResult := transactionData(kind, raw, title, occurredAt)
+	transaction, transactionErr := transactionResult.Value()
+	if transactionErr != nil {
+		return result.Err[domain.CanonicalEvent](transactionErr)
+	}
+
 	canonical, canonicalErr := domain.NewCanonicalEvent(domain.CanonicalEventParams{
 		OrganizationID:       project.OrganizationID(),
 		ProjectID:            project.ProjectID(),
@@ -118,10 +172,13 @@ func parseEventPayload(
 		Platform:             raw.Platform,
 		Release:              raw.Release,
 		Environment:          raw.Environment,
-		Tags:                 eventTags(project, raw),
+		Tags:                 tags,
 		DefaultGroupingParts: defaultGroupingParts(kind, raw, title),
 		ExplicitFingerprint:  normalizeFingerprint(raw.Fingerprint),
 		JsStacktrace:         jsStacktraceFrames(kind, raw),
+		NativeModules:        nativeModules(raw),
+		NativeFrames:         nativeStacktraceFrames(kind, raw),
+		Transaction:          transaction,
 	})
 	if canonicalErr != nil {
 		return result.Err[domain.CanonicalEvent](canonicalErr)
@@ -130,10 +187,18 @@ func parseEventPayload(
 	return result.Ok(canonical)
 }
 
-func eventTags(project ProjectContext, payload rawEventPayload) map[string]string {
+func eventTags(project ProjectContext, payload rawEventPayload) result.Result[map[string]string] {
 	tags := parseTags(payload.Tags)
 	clientIP, hasClientIP := clientIPTag(project, payload, tags)
 	tags = withoutClientIPTags(tags)
+
+	distTagsResult := withEventDistTag(tags, payload.Dist)
+	distTags, distTagsErr := distTagsResult.Value()
+	if distTagsErr != nil {
+		return result.Err[map[string]string](distTagsErr)
+	}
+
+	tags = distTags
 	if hasClientIP {
 		tags["client_ip"] = clientIP
 	}
@@ -143,7 +208,21 @@ func eventTags(project ProjectContext, payload rawEventPayload) map[string]strin
 		tags["server_name"] = serverName
 	}
 
-	return tags
+	return result.Ok(tags)
+}
+
+func withEventDistTag(tags map[string]string, input string) result.Result[map[string]string] {
+	dist, distErr := domain.NewOptionalDistName(input)
+	if distErr != nil {
+		return result.Err[map[string]string](NewProtocolError(ErrorInvalidEvent, "invalid dist"))
+	}
+
+	if !dist.HasValue() {
+		return result.Ok(tags)
+	}
+
+	tags["dist"] = dist.String()
+	return result.Ok(tags)
 }
 
 func clientIPTag(
@@ -552,6 +631,175 @@ func defaultGroupingParts(
 	}
 }
 
+func transactionData(
+	kind domain.EventKind,
+	payload rawEventPayload,
+	title domain.EventTitle,
+	occurredAt domain.TimePoint,
+) result.Result[domain.TransactionData] {
+	if kind != domain.EventKindTransaction {
+		return result.Ok(domain.TransactionData{})
+	}
+
+	durationResult := transactionDuration(payload.StartTime, occurredAt)
+	duration, durationErr := durationResult.Value()
+	if durationErr != nil {
+		return result.Err[domain.TransactionData](durationErr)
+	}
+
+	traceResult := transactionTrace(payload.Contexts.Trace)
+	traceState, traceErr := traceResult.Value()
+	if traceErr != nil {
+		return result.Err[domain.TransactionData](traceErr)
+	}
+
+	spans := transactionSpans(payload.Spans)
+	name := transactionName(payload, title)
+	operation := payload.Contexts.Trace.Operation
+	status := payload.Contexts.Trace.Status
+
+	if traceState.ok {
+		transaction, transactionErr := domain.NewTransactionDataWithTrace(
+			name,
+			operation,
+			duration,
+			status,
+			traceState.trace,
+			spans,
+		)
+		if transactionErr != nil {
+			return result.Err[domain.TransactionData](transactionErr)
+		}
+
+		return result.Ok(transaction)
+	}
+
+	transaction, transactionErr := domain.NewTransactionData(
+		name,
+		operation,
+		duration,
+		status,
+		spans,
+	)
+	if transactionErr != nil {
+		return result.Err[domain.TransactionData](transactionErr)
+	}
+
+	return result.Ok(transaction)
+}
+
+type transactionTraceResult struct {
+	trace domain.TransactionTraceContext
+	ok    bool
+}
+
+func transactionTrace(raw rawTraceContext) result.Result[transactionTraceResult] {
+	traceID := strings.TrimSpace(raw.TraceID)
+	spanID := strings.TrimSpace(raw.SpanID)
+	parentSpanID := strings.TrimSpace(raw.ParentSpanID)
+	if traceID == "" && spanID == "" && parentSpanID == "" {
+		return result.Ok(transactionTraceResult{})
+	}
+
+	trace, traceErr := domain.NewTransactionTraceContext(traceID, spanID, parentSpanID)
+	if traceErr != nil {
+		return result.Err[transactionTraceResult](NewProtocolError(ErrorInvalidEvent, "invalid trace context"))
+	}
+
+	return result.Ok(transactionTraceResult{trace: trace, ok: true})
+}
+
+func transactionDuration(
+	startPayload json.RawMessage,
+	end domain.TimePoint,
+) result.Result[time.Duration] {
+	if len(startPayload) == 0 {
+		return result.Ok(time.Duration(0))
+	}
+
+	startResult := parseTimestamp(startPayload)
+	start, startErr := startResult.Value()
+	if startErr != nil {
+		return result.Err[time.Duration](NewProtocolError(ErrorInvalidEvent, "invalid start timestamp"))
+	}
+
+	duration := end.Time().Sub(start.Time())
+	if duration < 0 {
+		return result.Err[time.Duration](NewProtocolError(ErrorInvalidEvent, "transaction duration is negative"))
+	}
+
+	return result.Ok(duration)
+}
+
+func transactionName(payload rawEventPayload, title domain.EventTitle) string {
+	if value := strings.TrimSpace(payload.Transaction); value != "" {
+		return value
+	}
+
+	return title.String()
+}
+
+func transactionSpans(rawSpans []rawSpan) []domain.TransactionSpan {
+	spans := []domain.TransactionSpan{}
+
+	for _, raw := range rawSpans {
+		span, ok := buildTransactionSpan(raw)
+		if !ok {
+			continue
+		}
+
+		spans = append(spans, span)
+	}
+
+	return spans
+}
+
+func buildTransactionSpan(raw rawSpan) (domain.TransactionSpan, bool) {
+	duration, ok := spanDuration(raw)
+	if !ok {
+		return domain.TransactionSpan{}, false
+	}
+
+	span, spanErr := domain.NewTransactionSpan(
+		raw.SpanID,
+		raw.ParentSpanID,
+		raw.Operation,
+		raw.Description,
+		duration,
+		raw.Status,
+	)
+	if spanErr != nil {
+		return domain.TransactionSpan{}, false
+	}
+
+	return span, true
+}
+
+func spanDuration(raw rawSpan) (time.Duration, bool) {
+	if len(raw.StartTime) == 0 || len(raw.Timestamp) == 0 {
+		return 0, true
+	}
+
+	startResult := parseTimestamp(raw.StartTime)
+	start, startErr := startResult.Value()
+	if startErr != nil {
+		return 0, false
+	}
+
+	endResult := parseTimestamp(raw.Timestamp)
+	end, endErr := endResult.Value()
+	if endErr != nil {
+		return 0, false
+	}
+
+	duration := end.Time().Sub(start.Time())
+	if duration < 0 {
+		return 0, false
+	}
+
+	return duration, true
+}
+
 func exceptionValues(payload json.RawMessage) rawException {
 	if len(payload) == 0 {
 		return rawException{}
@@ -715,4 +963,212 @@ func isJsPlatform(platform string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(platform))
 
 	return normalized == "javascript" || normalized == "node"
+}
+
+func nativeModules(payload rawEventPayload) []domain.NativeModule {
+	modules := []domain.NativeModule{}
+
+	for _, image := range payload.DebugMeta.Images {
+		module, ok := buildNativeModule(image)
+		if !ok {
+			continue
+		}
+
+		modules = append(modules, module)
+	}
+
+	return modules
+}
+
+func buildNativeModule(image rawDebugImage) (domain.NativeModule, bool) {
+	debugID, debugIDErr := domain.NewDebugIdentifier(image.DebugID)
+	if debugIDErr != nil {
+		return domain.NativeModule{}, false
+	}
+
+	imageAddr, imageAddrOK := parseJSONAddress(image.ImageAddr)
+	if !imageAddrOK {
+		imageAddr = 0
+	}
+
+	imageSize, imageSizeOK := parseJSONAddress(image.ImageSize)
+	if !imageSizeOK {
+		imageSize = 0
+	}
+
+	module, moduleErr := domain.NewNativeModule(
+		debugID,
+		image.CodeFile,
+		imageAddr,
+		imageSize,
+	)
+	if moduleErr != nil {
+		return domain.NativeModule{}, false
+	}
+
+	return module, true
+}
+
+func nativeStacktraceFrames(kind domain.EventKind, payload rawEventPayload) []domain.NativeFrame {
+	if kind != domain.EventKindError {
+		return nil
+	}
+
+	modules := nativeModules(payload)
+	exception := exceptionValues(payload.Exception)
+	frames := []domain.NativeFrame{}
+
+	for _, value := range exception.Values {
+		for _, raw := range value.Stacktrace.Frames {
+			frame, ok := buildNativeFrame(raw, modules)
+			if !ok {
+				continue
+			}
+
+			frames = append(frames, frame)
+		}
+	}
+
+	return frames
+}
+
+func buildNativeFrame(
+	frame rawFrame,
+	modules []domain.NativeModule,
+) (domain.NativeFrame, bool) {
+	instructionAddr, instructionAddrOK := parseJSONAddress(frame.InstructionAddr)
+	if !instructionAddrOK {
+		return domain.NativeFrame{}, false
+	}
+
+	debugID, hasDebugID := nativeFrameDebugID(frame, modules, instructionAddr)
+	if hasDebugID {
+		built, builtErr := domain.NewNativeFrameWithModule(
+			instructionAddr,
+			debugID,
+			frame.Function,
+			frame.Package,
+		)
+		if builtErr != nil {
+			return domain.NativeFrame{}, false
+		}
+
+		return built, true
+	}
+
+	built, builtErr := domain.NewNativeFrame(
+		instructionAddr,
+		frame.Function,
+		frame.Package,
+	)
+	if builtErr != nil {
+		return domain.NativeFrame{}, false
+	}
+
+	return built, true
+}
+
+func nativeFrameDebugID(
+	frame rawFrame,
+	modules []domain.NativeModule,
+	instructionAddr uint64,
+) (domain.DebugIdentifier, bool) {
+	debugID, debugIDErr := domain.NewDebugIdentifier(frame.DebugID)
+	if debugIDErr == nil {
+		return debugID, true
+	}
+
+	module, hasModule := nativeModuleForPackage(frame.Package, modules)
+	if hasModule {
+		return module.DebugID(), true
+	}
+
+	module, hasModule = nativeModuleForInstructionAddr(instructionAddr, modules)
+	if hasModule {
+		return module.DebugID(), true
+	}
+
+	return domain.DebugIdentifier{}, false
+}
+
+func nativeModuleForPackage(
+	pkg string,
+	modules []domain.NativeModule,
+) (domain.NativeModule, bool) {
+	value := strings.TrimSpace(pkg)
+	if value == "" {
+		return domain.NativeModule{}, false
+	}
+
+	for _, module := range modules {
+		if module.CodeFile() != value {
+			continue
+		}
+
+		return module, true
+	}
+
+	return domain.NativeModule{}, false
+}
+
+func nativeModuleForInstructionAddr(
+	instructionAddr uint64,
+	modules []domain.NativeModule,
+) (domain.NativeModule, bool) {
+	for _, module := range modules {
+		if !nativeModuleContainsInstructionAddr(module, instructionAddr) {
+			continue
+		}
+
+		return module, true
+	}
+
+	return domain.NativeModule{}, false
+}
+
+func nativeModuleContainsInstructionAddr(
+	module domain.NativeModule,
+	instructionAddr uint64,
+) bool {
+	if instructionAddr < module.ImageAddr() {
+		return false
+	}
+
+	if module.ImageSize() == 0 {
+		return instructionAddr == module.ImageAddr()
+	}
+
+	return instructionAddr-module.ImageAddr() < module.ImageSize()
+}
+
+func parseJSONAddress(payload json.RawMessage) (uint64, bool) {
+	if len(payload) == 0 {
+		return 0, false
+	}
+
+	var text string
+	textErr := json.Unmarshal(payload, &text)
+	if textErr == nil {
+		value, valueErr := parseAddressText(text)
+		return value, valueErr == nil
+	}
+
+	var number uint64
+	numberErr := json.Unmarshal(payload, &number)
+	if numberErr != nil {
+		return 0, false
+	}
+
+	return number, true
+}
+
+func parseAddressText(input string) (uint64, error) {
+	value := strings.TrimSpace(input)
+	value = strings.TrimPrefix(value, "0x")
+	value = strings.TrimPrefix(value, "0X")
+	if value == "" {
+		return 0, errors.New("address is empty")
+	}
+
+	return strconv.ParseUint(value, 16, 64)
 }

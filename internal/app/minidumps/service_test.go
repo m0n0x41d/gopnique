@@ -203,6 +203,39 @@ func TestServiceGetReturnsNotFoundWhenIdentityMissing(t *testing.T) {
 	}
 }
 
+func TestServiceDeleteRemovesStoredMinidump(t *testing.T) {
+	service, identity, organizationID, projectID := newServiceFixture(t)
+
+	if _, err := service.Upload(
+		context.Background(),
+		organizationID,
+		projectID,
+		identity,
+		bytes.NewReader(buildMinidumpFixture(64)),
+	).Value(); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	if _, err := service.Delete(
+		context.Background(),
+		organizationID,
+		projectID,
+		identity,
+	).Value(); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	_, getErr := service.Get(
+		context.Background(),
+		organizationID,
+		projectID,
+		identity,
+	).Value()
+	if !errors.Is(getErr, ErrMinidumpNotFound) {
+		t.Fatalf("expected ErrMinidumpNotFound after delete, got %v", getErr)
+	}
+}
+
 func TestServiceUploadRejectsOversizedPayload(t *testing.T) {
 	service, identity, organizationID, projectID := newServiceFixture(t)
 

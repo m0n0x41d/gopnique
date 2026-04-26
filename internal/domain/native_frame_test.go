@@ -106,3 +106,31 @@ func TestCanonicalEventReturnsNativeFramesCopy(t *testing.T) {
 		t.Fatalf("expected native frame to remain stable, got %q", second[0].Function())
 	}
 }
+
+func TestCanonicalEventWithNativeFramesReturnsUpdatedCopy(t *testing.T) {
+	originalFrame, originalFrameErr := NewNativeFrame(0x10001234, "", "")
+	if originalFrameErr != nil {
+		t.Fatalf("original frame: %v", originalFrameErr)
+	}
+
+	updatedFrame, updatedFrameErr := NewNativeFrame(0x10001234, "render_home", "app")
+	if updatedFrameErr != nil {
+		t.Fatalf("updated frame: %v", updatedFrameErr)
+	}
+
+	event := mustCanonicalEvent(t, CanonicalEventParams{
+		Kind:         EventKindError,
+		Level:        EventLevelError,
+		Title:        mustTitle(t, "SegFault"),
+		NativeFrames: []NativeFrame{originalFrame},
+	})
+	updated := event.WithNativeFrames([]NativeFrame{updatedFrame})
+
+	if event.NativeFrames()[0].Function() != "" {
+		t.Fatalf("expected original event to remain unchanged")
+	}
+
+	if updated.NativeFrames()[0].Function() != "render_home" {
+		t.Fatalf("expected updated frame")
+	}
+}
